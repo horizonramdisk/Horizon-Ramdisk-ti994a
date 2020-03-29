@@ -1,0 +1,119 @@
+* quick and dirty rs232 debug routines
+* So long as we don't enable the card (i.e., SBO 0) we can leverage
+* rs232 cru operations from within the ROS DSR space :)
+*
+* 38.4 8N1, port 1
+*
+*
+
+;	BLWP @XMTEXT
+;	DATA FNDXM1
+;	BLWP @XMNUM
+;	DATA VAL  (data or register ref)
+
+INITXM1 TEXT '~INIT 38.4~'
+	BYTE 0
+FNDXM1	TEXT '~FNDSEC: ~'
+	BYTE 0
+FDRXM1  TEXT '~FDR: ~'
+	BYTE 0
+SECXM1  TEXT '~Sector: '
+	BYTE 0
+ADDXM1  TEXT '~ADDSEC: '
+	BYTE 0
+
+HEXHEX  TEXT '0123456789ABCDEF'
+
+SQUIG   TEXT '~~'
+	DATA 0
+DUMB1   DATA 0	temp holding for a  word
+
+XMWS    BSS  >20
+XMTEXT DATA  XMWS,XMTXT1
+XMNUM  DATA  XMWS,XMNUM1
+
+; xmit string
+XMTXT1  LIMI  0
+	MOV *R14+,R1
+xmt0	MOVB *R1+,R2		get character
+	JEQ  XMTR		null?  end
+	CB   r2,@squig   "~"
+	JNE  XMT1
+	LI   r0,>0d0a   crlf
+	BL   @XMIT1	;display cr
+	SWPB  R0
+	JMP  xmt2	; and now LF
+
+xmt1	MOVB r2,R0
+xmt2	BL   @xmit1
+	JMP  xmt0
+
+; xmit  a  16-bit hex value
+XMNUM1  MOV *r14+,r8	get  address of  number
+	MOV *r14+,R5	get  number of hex  words to print 
+
+; loop here for multiple numbers
+XMNUM2	MOv *r8+,r1	get 16-bit number
+	MOV  R1,R2	copy number for shift
+	SRL  r2,12	
+	ANDI R2,>000F
+	MOVB @HEXHEX(R2),R0
+	BL  @XMIT1
+
+	MOV  R1,R2
+	SRL  R2,8
+	ANDI R2,>000F
+	MOVB @HEXHEX(R2),R0
+	BL  @XMIT1
+
+	MOV  R1,R2
+	SRL  R2,4
+	ANDI R2,>000F
+	MOVB @HEXHEX(R2),R0
+	BL  @XMIT1
+
+	MOV  R1,R2
+	ANDI R2,>000F
+	MOVB @HEXHEX(R2),R0
+	BL  @XMIT1
+	
+	LI	r0,>2000	xmit a space
+	BL  @XMIT1
+
+	DEC R5
+	JNE XMNUM2
+
+XMTR	RTWP
+
+
+; BL @XMIT1
+; R0msb - xmit byte
+; might need to change from TB >17 to TB >16
+;
+XMIT1   LI   R12,>1340
+EO      TB   >17    xmit?       
+        JNE  EO                 
+        SBO  >10                
+	LDCR R0,8              
+        SBZ  >10                
+	RT
+
+creg	data  >8300	;8n1
+breg	data  >000D 	;38.4  1A=19.2; 34=9600
+
+; where do we init this port? ramdisk powerup? 
+; BLWP  @INITRS
+;
+INITRS DATA XMWS,INITR1
+INITR1	LIMI 0
+	LI R12,>1340 
+       SBO  >1F          Reset 9902
+       LI   R5,>0200
+INITR2  DEC  R5           delay
+       JNE  INITR2
+       SBZ  >0D          Bit 13, disable interval register
+       LDCR @CREG,8      set 8n1
+       LDCR @BREG,>0C    set baud
+	SBZ  >12	Disable RCV interrupt! (and hope XB doesn't override somewhere)
+;;       SBO  >12          Enable RCV Interrupt
+	RTWP
