@@ -1,0 +1,1251 @@
+* ROS-S1
+*********************************************
+*                                           *
+*         RAMDISK OPERATING SYSTEM          *
+*                                           *
+* COPYRIGHT 1985, HORIZON COMPUTER, LIMITED *
+* COPYRIGHT 1988, BUD MILLS SERVICES        *
+* COPYRIGHT 1989, OASIS PENSIVE ABACUTORS   *
+*********************************************
+*                                           *
+* Updated 2012-2020, InsaneMultitasker (TT) *
+*                                           *
+* Version 8.42c   14 March 2020             *
+*********************************************
+; Primary routines in this file: 
+;
+; Transfer records/data to vdp/cpu
+;	- GETNME/GETNMF	Get file name
+; 	- BFTRAN	Transfer record
+;	- TWRITE	VDP/CPU->RAMdisk
+;	- TREAD		Ramdisk->VDP/CPU
+;
+; SECIO	 >10 Single Sector IO
+; FORMAT >11 format
+; PROTCT >12 file protect/unprotect
+; RENAME >13 Rename
+; INPUT  >14 Direct Input
+; OUTPUT >15 Direct Output
+; 
+; OPENFIL 	>00 Open File
+; PTCHAA, OP00N1
+; CLOSE/PTCH8 	>01 	Close file
+; READ/PTCHC 	>02	Read record
+; WRITE/OP03NX	>03	Write record
+; RESTORE/PTCH6	>04	Restore record
+; LOAD/PTCH2	>05	Load Program Image
+; SAVE/PTCH3	>06	Save Program Image
+; DELETE/PTCH5	>07	Delete file
+; SCRATCH/OP08IN>08	Scratch record
+; 
+*********************************************
+*  DATE     CHANGE
+*3.20.2012  Reconciled source with 8.14F
+*2.20.2012  MFDB:   Strip Myarc Backup Bit during Direct OUTPUT from ADDINFO
+*           OP2NOA: Fix level 3 catalog routine by masking backup bit
+*3.11.2012  INPT:   Strip Myarc bit from Direct INPUT routine
+*           SAGAIN: Correct Catalog file bitmap count
+*11.17.2019 Researched the FDB/AU VIB overwrite in CRE4A.See notes.
+*
+* 1.17.2020	Multiple fixes to OUTxx code. Also see comments re: posible issue in OUTIN6
+*		Added TTFREE BLWP routine for bitmap space check
+* 1.19.2020	OUT fixes require more space than available; optimization needed.
+* 		Clean up comments/document
+* 1.24.2020	Reactivated cluster code at OUT4 after moving LNK to 2k DSR space
+*
+; 2-17-2020	SCRATCH OPCODE CRIPPLED TO TEST FAST VDP READ ROUTINE
+;		fast vdp routine shaved 25% but not enough to warrant removing opcode
+;
+
+
+*****************
+* GET FILE NAME *
+*****************
+GETNME MOV  @FAC+4,R8         Get FROM: addresss
+GETNMF LI   R0,10             Length of transfer
+       LI   R6,FILNME         Get TO:   address
+       JMP  TWRITE            Transfer the filename!
+
+*********************
+* TRANSFER A RECORD *
+*********************
+BFTRAN MOVB @HIWS+1,@PAB+5    Get record length
+       JEQ  TRANRT            If ZERO, then skip transfer
+       MOV  @PAB+2,R8         Get FROM/TO address
+       ABS  @SV5              If 0 then WRITE else READ
+       JNE  TREAD             Jump if a READ transfer
+
+*********************
+* VDP/CPU > RAMDISK *
+*********************
+TWRITE ABS  @VDPCPU           WRITE: Check if VDP or CPU
+       JNE  TWCPU             Jump if CPU transfer mode
+       MOVB @HIWS+17,@VDPWA   Write LSByte of VDP address
+       MOVB R8,@VDPWA         Write MSByte of VDP address
+       A    R0,R8             Point to the next VDP buffer (is this a legacy instruction?
+
+TWVDP  MOVB *R13,*R6+         A byte from VDP to RAMDISK
+       DEC  R0                Check if finished
+       JNE  TWVDP             Nope, so write some more
+       RT                     EXIT TRANSFER PROGRAM
+TWCPU  MOVB *R8+,*R6+         A byte from CPU to RAMDISK
+       DEC  R0                Check if finished
+       JNE  TWCPU             Nope, so write some more
+       RT                     EXIT TRANSFER PROGRAM
+
+*********************
+* RAMDISK > VDP/CPU *
+*********************
+TREAD  ABS  @VDPCPU           READ:  Check if VDP or CPU
+       JNE  TRCPU             Jump if CPU transfer mode
+       SOCB @MASK,R8          Indicate a write to VDP RAM
+       MOVB @HIWS+17,@VDPWA   Write LSByte of VDP address
+       MOVB R8,@VDPWA         Write MSByte of VDP address
+
+;What is the next VDP buffer referring to? 
+; is this a remnant from old ROS?  See above in VDP/CPU>RAMDISK routine
+       A    R0,R8             Point to the next VDP buffer
+
+TRVDP  MOVB *R6+,*R14         A byte from RAMDISK to VDP
+       DEC  R0                Check if finished
+       JNE  TRVDP             Nope, so write some more
+       RT                     EXIT TRANSFER PROGRAM
+
+TRCPU  MOVB *R6+,*R8+         A byte from RAMDISK to CPU
+       DEC  R0                Check if finished
+       JNE  TRCPU             Nope, so write some more
+TRANRT RT                     EXIT TRANSFER PROGRAM
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; 2-17-2020
+; fast vdp move - Rasmus idea
+; program image load time decreases by approx 35%
+; Loading DM2k (4 files) takes 1.5s vs. 2.0s
+; If we were loading larger files, maybe I would find a way to implement.
+; Save for another day.
+
+;VDPFAST
+;	mov     r1,@vdpcpr1	;SAVE previous R1 for this loop
+;
+;	mov	r0,r1		;bytes to write
+;	srl	r1,3		; divide by 8
+;	jeq	vdpcp2		; if 0, we had <8 so do slower loop
+;vdpcp1	movb   *r6+,*r14	;otherwise, perform fast loop for R1 (r0/8) iterations
+;	movb   *r6+,*r14
+;	movb   *r6+,*r14
+;	movb   *r6+,*r14
+;	movb   *r6+,*r14
+;	movb   *r6+,*r14
+;	movb   *r6+,*r14
+;	movb   *r6+,*r14
+;	dec	r1 
+;	jne	vdpcp1
+;
+;	andi	r0,>0007	;now check for any remaining bytes
+;	jeq	vdpcp3
+;vdpcp2	movb    *r6+,*r14	;and transfer them too
+;	dec	r0
+;	jne	vdpcp2
+;vdpcp3	mov     @vdpcpr1,r1
+;	rt
+;
+;vdpcpr1	data 0	;temp hold/restore
+;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+*************************
+* SINGLE SECTOR I/O >10 *
+*************************
+SECIO  MOV  @FAC+4,R8         Get buffer address
+       MOV  @FAC+6,R6         Get sector number
+       C    R6,@FORSEC        Is SEC# > MAX. on ths disk
+       JHE  RENERR            Yep, so send ERROR MSG.
+       MOV  R6,@FAC           Return good sector number
+       BL   @ADDR             Bring up the sector wanted
+FSPGM  EQU  $+2               Point to the 256 below
+       LI   R0,256            Length of transfer
+       LI   R11,IO$OK         Where to go after the transfer
+       MOVB @FAC+3,R1         Is it a READ or a WRITE
+       JNE  TREAD             If READ then jump to TREAD
+       ABS  @WTPR             If WRITE then check protection
+       JEQ  TWRITE            If no protection, then jump
+WPERR  MOVB @ERR1,R0          SEND WRITE PROTECTED ERROR
+       JMP  IO$ERR            EXIT THE DSR
+
+**********************
+* FORMAT ROUTINE >11 *
+**********************
+FORMAT ABS  @WTPR             Check if disk is write protected
+       JNE  WPERR             Yep, so exit with PROTECTION ERROR
+       MOV  @FORSEC,@FAC      Pass back the number of sectors FORMATED
+IO$OK  CLR  R0                NO ERRORS, so clear the error byte
+IO$ERR MOVB R0,@FAC+6         Return with or without a ERROR message
+       B    @GPRTN            EXIT THE DSR
+
+**************************
+* PROTECTION ROUTINE >12 *
+**************************
+PROTCT ABS  @WTPR             Check if disk is write protected
+       JNE  WPERR             Yep, so exit with PROTECTION ERROR
+       BL   @GETNME           Get the filename from VDP/CPU memory
+       BL   @SEARCH           Check if this file is on the diskette
+       JMP  RENERR            Not found, so return with ERROR
+       AI   R6,12             Point to the status byte in the FDB
+       MOVB @FAC+3,R0         Check if PROTECTION ON or OFF
+       JEQ  PROT3             If ZERO, then turn off PROTECTION
+       SOC  @PRO,*R6          Turn on  protection for this file
+       JMP  IO$OK             EXIT THE DSR
+PROT3  SZC  @PRO,*R6          Turn off protection for this file
+       JMP  IO$OK             EXIT THE DSR
+
+**********************
+* RENAME ROUTINE >13 *
+**********************
+RENAME ABS  @WTPR             Check if disk is write protected
+       JNE  WPERR             Yep, so exit with PROTECTION ERROR
+       MOV  @FAC+6,R8         Get pointer to the old filename
+       BL   @GETNMF           Get the old filename from VDP/CPU memory
+       BL   @SEARCH           Check if this file is on the diskette
+       JMP  RENERR            Not found, so return with ERROR
+       MOV  @FDBSEC,@SV5      Save the FDB SEC#, will be used later on!
+       AI   R6,12             Point to the status byte in the FDB
+       MOVB *R6,R0            Get the status/type of this file
+       COC  @PRO,R0           Check if the file is protected
+       JNE  RENM6             Nope, so skip over PROTECTION ERROR
+RENERR MOVB @ERR6,R0          ERROR: Send error message back!
+       JMP  IO$ERR            EXIT THE DSR
+RENM6  BL   @GETNME           Get the new filename from VDP/CPU memory
+       BL   @SEARCH           Check if this file is on the diskette
+       JMP  RENM13            Not found, so skip over ERROR return
+       JMP  RENERR            Found! So send ERROR msg. back
+RENM13 MOV  @SV5,@FDBSEC      Restore the old FDB SEC#
+       BL   @ADDRF            Bring up the old FDB sector
+       LI   R1,FILNME         Point to the new filename in ROS buffer
+       LI   R2,10             Max. length of the new filename
+RENM12 MOVB *R1+,*R6+         Move a byte of the filename
+       DEC  R2                Check if finished
+       JNE  RENM12            Nope, so move some more
+       BL   @COUNT            Count the number of files on the disk!
+       BL   @ADJUST           Resort the catalog on sector #1
+       JMP  IO$OK             EXIT THE DSR
+
+*****************************
+* TRANSFER DIRECT INPUT >14 *
+*****************************
+INPUT  BL   @GETNME           Get name from VDP
+       LI   R11,GPRTN         Setup EXT. RETURN ADDRESS
+
+; here from LOAD opcode
+INPT   MOV  R11,@INPERR+2     Save INT/EXT RETURN ADDRESS
+       BL   @SEARCH           Search for the FILE
+       JMP  IOERR             Not found, so send ERROR msg.
+
+       MOVB @FAC+6,R10        Get pointer for ADDL INFO BLOCK
+       SRL  R10,8             Right justify
+       AI   R10,>8300         R10= Address of ADDL INFO BLOCK
+       MOVB @FAC+3,R5         Check access code
+       JNE  INP4              If access code <> 0 then INP4
+
+       C    *R10+,*R10+       Point to >8344 STATUS FLAG
+       AI   R6,12             Point to   FDB STATUS FLAG
+       MOV  *R6+,*R10         Transfer the info to the AIB
+
+*-3.11.2012- Fix direct READ routine
+       MOV  *R10,R11          Ok. Let's mask Myarc bits here, too
+       ANDI R11,>EFFF         to stop RAMDISK->floppy from propogating
+       MOV  R11,*R10          R11 should be ok to use as we push it to RT
+*------
+       DECT R10               Point to >8342 LEVEL 2 RECS ALLOC
+       MOV  *R6+,*R10+        Transfer the info to the AIB
+       INCT R10               Point to >8346 EOF OFFSET
+       MOV  *R6+,*R10+        Transfer the info to the AIB
+       MOV  *R6,*R10          Transfer  # of LEVEL 3 RECS ALLOC
+       MOV  @FAC+12,@FAC+4    Move copy of 8356 to >834E  ??
+       MOVB @FF00,@FAC+3      Put >FF into byte at >834D  ??
+       JMP  INRTN             RETURN WITH NO ERRORS!
+IOERR  MOVB @ERR6,@FAC+6      Nope, so send ERROR msg.
+       JMP  INPERR            RETURN WITH ERRORS!
+
+INP4   SRL  R5,8              Number of sectors to transfer
+       CLR  @FAC+2            Start with NO SECTORS transfered
+       MOV  *R10+,R8          Starting address of buffer
+       MOV  *R10,R3           Starting AU in file to transfer
+INP6   BL   @ADDRF            Bring up the FDR on the file
+       BL   @GETAU            INPUT: R3      OUTPUT: R4
+       MOV  R4,R6             Sector number to transfer
+       JEQ  INRTN             If 0 at EOF, so exit with NO ERRORS!
+       C    R6,@FORSEC        Check if sector # within range
+       JHE  IOERR             Nope, so send ERROR msg.
+       BL   @ADDR             Bring up the sector we want
+       LI   R0,256            Length of the transfer
+       BL   @TREAD            RAMDISK to VDP/CPU transfer
+       INC  R3                Point to next AU of file
+       INC  @FAC+2            INC number of sectors transfered
+       DEC  R5                Check if transfer everything
+       JNE  INP6              Nope, so do another sector
+INRTN  CLR  @FAC+6            RETURN WITH NO ERRORS!
+INPERR B    @>0000            Return to calling program
+
+******************************
+* TRANSFER DIRECT OUTPUT >15 *
+******************************
+OUTPUT BL   @GETNME           Get name from VDP
+       LI   R11,GPRTN         Setup EXT. RETURN ADDRESS
+
+; entry point for SAVE opcode >06
+OUT2   MOV  R11,@INPERR+2     Save INT/EXT RETURN ADDRESS
+       ABS  @WTPR             RAMDISK write protected?
+       JEQ  OUT1A             Nope, so jump error send
+OUTWP  MOVB @ERR1,@FAC+6      Yep, so send ERROR msg.
+       JMP  INPERR            RETURN WITH ERRORS
+;
+; The search mechanism finds the file and also pulls in the existing FDB
+; until another call swaps it out.
+;
+OUT1A  BL   @SEARCH           Search for the FILE
+       CLR  R8                Set NOT FOUND flag
+       MOVB @FAC+3,R5         Check access code
+       JEQ  OUT4              If code = 0 then goto OUT4
+*
+* ACCESS CODE <> 0
+*
+* This routine performs direct output to an existing file
+* 1. checks for file existence
+* 2. gets ADDINFO parameters, sets up loop
+* 3. transfers sectors into the file
+* NOTE:  confirm (FORSEC) is proper for sector range
+*
+*
+
+       ABS  R8                Does file exist?
+       JEQ  IOERR             Nope, so exit with error
+       MOVB @FAC+6,R10        Get pointer for ADDL INFO BLOCK
+       SRL  R10,8             Right justify
+       AI   R10,>8300         R10= Address of ADDL INFO BLOCK
+       SRL  R5,8              Number of sectors to transfer
+       CLR  @FAC+2            Start with NO SECTORS transfered
+       MOV  *R10+,R8          Starting address of VDP buffer
+       MOV  *R10,R3           Starting AU in file to transfer
+OUTIN6 BL   @ADDRF            Bring up the FDR on the file
+       BL   @GETAU            INPUT: R3      OUTPUT: R4
+       MOV  R4,R6             Sector number to transfer
+       JEQ  INRTN             If 0 at EOF, so exit with NO ERRORS!
+*
+**
+*** 1.18.2020	REVIEW for errors. OK
+**
+* 
+       C    R6,@FORSEC        Check if sector # within range
+       JHE  IOERR             Nope, so send ERROR msg.
+
+       BL   @ADDR             Bring up the sector we want
+       LI   R0,256            256 bytes to transfer
+       BL   @TWRITE           VDP/CPU to RAMDISK transfer
+       INC  R3                Point to next AU of file
+       INC  @FAC+2            INC number of sectors transfered
+       DEC  R5                Check if transfer everything
+       JNE  OUTIN6            Nope, so do another sector
+       JMP  INRTN             Exit to calling program
+
+*
+* ACCESS CODE = 0 AND NO FILE FOUND
+*
+; 1. If file doesn't exist, count free sectors FIRST +1 and compare with AU
+;	- If not enough sectors, dump out with an error BEFORE creating FDB.
+; 2. If file DOES exist, free sectors then compare AU. If not enough, how do we eliminate the FDB? Ugh.
+;	- Beery suggests counting the file (assuming unprotected) sectors + free sectors. If too few, abort without corrupting file.
+;
+;
+
+OUT4   ABS  R8                Does file exist?
+       JNE  OUT41             Yep, goto OUT41
+       BL   @COUNT            Count files on disk
+       CI   R11,127           Max. files on disk?
+       JEQ  OUT4C             Yep, RETURN ERROR >04
+
+;////////NEW CODE///////////////////
+; 1-17-2020
+; CHECK available space on disk PRIOR to creating
+; the FDB or file clusters. 
+; 1-18, code works. Running out of space. Let's test existing file fix then optimize.
+; 1-24, reactivated after moving LNK code to 2k section. 20 bytes free after linking.
+;
+       BLWP @TTFREE
+       MOVB @FAC+6,R0         Get pointer to ADDL INFO BLOCK
+       SRL  R0,8              Right justify
+       AI   R0,>8302          Point to TOTAL AU for file
+       MOV  *r0,r0            get requested sectors
+       INC  r0                account for new FDB
+       C   @FORSEC,@D1600     quad density? (2sec/AU)
+       JLE OUT4T             no
+       INC r0                yes, double FDB sector count
+OUT4T  c    r0,@TTWS16+4     Are available sectors>= needed AUs
+      JH   OUT4C             No. Requested sectors>available.  Error >04, disk full
+;
+;;;
+;\\\\\\\\\\\\\\\\\\\\\\\\\\\end new code\\\\\\\\\\\\\\\
+;
+       BL   @FNDSEC           Find first free sector
+       MOV  R1,@FDBSEC        Make the FREE SECTOR the FDB
+       JNE  OUT4D             If >0 then sector is free
+OUT4C  MOVB @ERR4,@FAC+6      DISK FULL ERROR
+       JMP  INPERR            Return with ERROR msg.
+OUT4D  INC  @FILCNT           Add 1 to count, for new file
+       SETO @FLAG             Set flag to insert new file name
+       BL   @ADJ1             Insert new FDB pointer in SEC 1
+       JMP  OUT4E
+
+
+*=======================================
+* ACCESS CODE=0 AND FILE FOUND
+*
+*=======================================
+OUT41  BL   @ADDRF            Enable FDB
+       AI   R6,12             Point to STATUS flags in FDB
+       MOVB *R6,R0            Get file STATUS FLAG
+       COC  @PRO,R0           Is file protected?
+       JEQ  OUTWP             Yep, so RETURN ERROR
+
+
+;======================================
+; Before we free the bitmap based on the current file's cluster
+; allocation, let's check the CURRENT file size and compute
+; available space == current file size + free space
+;
+; IN THEORY, we can save the current file size during the SEARCH routine
+; so we have it when we get to this point. We can then test the available
+; space on disk, add to the current file, and determine course of action.
+;
+       BLWP @TTFREE
+       MOVB @FAC+6,R0         Get pointer to ADDL INFO BLOCK
+       SRL  R0,8              Right justify
+       AI   R0,>8302          Point to TOTAL AU for file
+       MOV  *r0,r0            get requested sectors
+
+; 1-18-20, must confirm sec/AU==2 works on boundary cases where file size is odd
+OUT41T A   @TTSEARCH,@TTWS16+4	; add existing file sectors (from SEARCH) to free sectors (TTFREE)
+       C   r0,@TTWS16+4		; Is new file > then computed available space? 
+       JH  OUT4C		; Yes, Error >04, disk full. PRESERVE existing file.
+
+;; NOW DELETE ALL THE FILE CLUSTERS from existing FDB (leaves FDB intact)
+
+       BL   @CLUSTR           Update the BITMAP using FDB clusters
+       SZCB R7,*R6            Mark the FDB sectors free
+
+*-----
+* CREATE FILE DESCRIPTOR BLOCK FOR ACCESS CODE = 0
+*
+; Before arriving at OUT4E we either: 
+; 1. For access=0 and no file: FBD created by OUT4
+; 2. For access=0 and file found:  remove cluster allocation and use existing FDB (OUT41)
+
+OUT4E  MOV  @FDBSEC,R0        Update BIT MAP for new FDB sector
+       BL   @UPDATE           Calc the position in the BITMAP
+       SOCB R7,*R6            Mark the FDB sector as used
+       BL   @ADDRF            Enable the new FDB sector
+       MOV  R6,R1             Starting address of the FDB
+       LI   R2,128            Length of FDB sector in words
+OUT4D1 CLR  *R1+              Clear a word of the FDB SECTOR
+       DEC  R2                Check if finished
+       JNE  OUT4D1            Nope, so clear some more
+       LI   R1,10             Length of FILENAME
+       LI   R2,FILNME         Buffer for the filename
+MFDB   MOVB *R2+,*R6+         Write a byte of the filename
+       DEC  R1                Check if finished
+       JNE  MFDB              Nope, so write some more
+       CLR  *R6+              Clear BYTES 11 and 12 of FDB
+       MOVB @FAC+6,R1         Pointer to ADDL INFO BLOCK
+       SRL  R1,8              Right justify
+       AI   R1,>8304          Point to STATUS FLAGS
+*
+* 2.20.2012tt - Fix Myarc BACKUP BIT PROBLEM!
+* dsku defeats this by recopying FDR via >10. Grr
+*      MOV  *R1+,*R6+         Transfer STATUS FLAGS
+       MOV  *R1+,R0           Transfer:  [STATUS | Rec/Sec] to R0
+       ANDI R0,>EFFF          Maxk bit 111x1111 from status flag
+       MOV  R0,*R6+           and transfer to FDB!
+
+       CLR  *R6+              NO LEVEL 2 RECS ALLOC
+       MOV  *R1+,*R6+         Transfer EOF OFFSET/LOGICAL REC SIZE
+       MOV  *R1+,*R6          Transfer LEVEL 3 RECS ALLOC
+       MOVB @FAC+6,R0         Get pointer to ADDL INFO BLOCK
+       SRL  R0,8              Right justify
+       AI   R0,>8302          Point to TOTAL AU for file
+       MOV  *R0,R9            Put TOTAL AU for file in R9
+       JNE  CRE               If not zero, then build clusters
+
+; (if zero, we have an FDB with no data)
+ 
+; CRE/CRE4A/etc
+; See AtariAge Dev forum, post 205.
+; If run out of space while building a cluster, the remnant is left
+; HOWEVER, if it is the first cluster, it may point back to the VIB
+; instead of the actual cluster.  Naughty.
+ 
+; in theory, we get here for a 0 sector file, or when all clusters built
+
+
+CRE4A  BL   @CLUSTR           Update the BITMAP using FDB clusters
+       SOCB R7,*R6            Mark the FDB sectors used
+       MOVB @FAC+6,R0         Get pointer to ADDL INFO BLOCK
+       SRL  R0,8              Put in LSB
+       AI   R0,>8302          R0 points to # OF LEV2 RECS
+       BL   @ADDRF            Enable FDB
+       AI   R6,14             R6 points to # OF LEV2 RECS
+       MOV  *R0,*R6           MOVE # OF LEV2 RECS TO FDB
+       B    @INRTN            RETURN WITH NO ERRORS
+CRE4B  B    @OUT4C            RETURN WITH DISK FULL ERROR
+*
+* CREATE DATA CLUSTERS
+*
+CRE    BL   @ADDRF            Bring up the FDB sector
+       AI   R6,28             Point to the first cluster
+; 3-byte cluster pointer = R10
+
+       MOV  R6,R10            Save the current cluster addr.
+       CLR  R8                Flag = Looking for a Starting Sector
+       LI   R1,2              Start the search at the first sector
+       CLR  R2                No offset at the moment
+
+CREATE MOV  R1,R0             Setup the UPDATE with sector number
+       BL   @UPDATE           Calc position in the BIT MAP
+
+; R7 is shifted into MSByte based on shift move. So this is ok
+       MOVB *R6,R0            Get the BIT MAP byte for the compar
+       CZC  R7,R0             Is this sector free
+       JEQ  CRE0              Yep, so count it
+       MOV  R8,R8             Nope, so check if looking for SS
+       JEQ  CRE4              Yep, so skip over cluster maker
+
+;                             (Cant create til we have starting sector!)
+
+; at this point we have create a cluster based on available, contiguous
+; sectors. put cluster into FDB, then figure out if another cluster is needed
+; IF we run out of space before first cluster is built/written, then the
+; file remnant points to VIB!
+; ADDRF - sets the 2k rack page based on FDBSEC, R6/r7
+
+CLFIN  BL   @ADDRF            Bring up the FDB sector
+       A    R1,R2             Add current sector # to current offset
+       S    R8,R2             Sub starting sector # from current offset
+       MOV  R2,R3             Save current offset into R3
+       MOV  R9,R9             Check if TOTAL AU left is ZERO
+       JEQ  CNXT              Yep, so skip over the DEC R3
+       DEC  R3                Nope, so sub 1 from current offset
+
+; BDCLST - builds cluster from r8/r3, moves 3 bytes via *R10
+;          so at this point, we are writing into the FDB
+;          if we never get here on first cluster, BLAM. problem.
+
+
+CNXT   BL   @BDCLST           Build a cluster up in the FDB sector
+       CLR  R8                Start looking for a new SS
+       MOV  R9,R9             Check if TOTAL AU left is ZERO
+       JEQ  CRE4A             Yep, then stop building the clusters
+; CRE4A means we successfully built our FBD
+
+       S    R6,R10            Make R10 cluster offset into the sector
+       CI   R10,255           Check if out of room for another cluster
+       JGT  CRE4B             Yep, so exit to diskette full ERROR
+
+; watch for sectors versus AUs... easy to get confused.
+
+       A    R6,R10            Add starting address into 2K RAM page
+CRE4   INC  R1                Point to the next sector on the diskette
+       C    R1,@FORSEC        Check if at the end of the diskette
+       JHE  CRE4B             Yep, so exit to diskette full ERROR
+       JMP  CREATE            Jump back up and check this sector
+
+CRE0   MOV  R8,R8             Sector is FREE, check if looking for SS
+       JNE  CRE3              Nope, so don't change R8
+       MOV  R1,R8             Yep, so make R8 the new SS sector number
+CRE3   DEC  R9                Check if finished building the clusters
+       JEQ  CLFIN             Yep, so write the last cluster
+       JMP  CRE4              Nope, so look for another free sector
+
+; new routine called from two places
+
+TTWS16	BSS >20
+TTFREE  DATA TTWS16,TTF1
+
+; Call ADDRF inside routine to set FDB; restore from outside.
+; BLWP @TTFREE
+; Out: caller R0 holds total sectors
+; Out: FDBSEC is restored and RACK restored to caller condition
+;
+
+TTF1   MOV  @24(R13),R12   ; get R12 for this call
+       MOV  @FDBSEC,R10    ; save current FDBSEC
+       CLR  @FDBSEC        ; set FDB sector to 0 for bitmap; ADDRF uses this
+       BL   @ADDRF         Bring up the FDB sector for this file and set R6
+
+       CLR  R2	
+       AI  R6,56	start of bitmap
+TTFNXT MOV  *R6+,R7           Get a word of the BITMAP
+       CI   R6,>5902          Check if at the end of the BITMAP
+       JEQ  TTFRET            Yep, so exit free counter
+       LI   R1,16             Max. of 16 sectors in this word
+TTFAIN SLA  R7,1              Check if a sector is used
+         JOC  TTFUSED             Jump over INC  R2 if used
+       INC  R2                Free, so count it
+       C    @FORSEC,@D1600    >1600?  
+         JLE  TTFUSED             no
+         INC  R2                yes, double sector count free (2 sec/AU)
+*-------
+TTFUSED  DEC  R1                Check if this word used up
+         JNE  TTFAIN            Nope, so check next sector
+         JMP  TTFNXT            Yep, so get another word from the BITMAP
+
+; YATTFU; label was in wrong place; FDB wasn't being restored!
+TTFRET   MOV  R2,*r13		;copy sectors available into caller R0
+         MOV  R10,@FDBSEC       need to reset FDBSEC
+         BL   @ADDRF            and call it to set R6 AND proper RACK to continue the call
+         RTWP
+
+; If requested AU+1 is >R2, then OUT OF SPACE. Do not create
+; If >R2 and file existed, can we delete it
+
+************************
+* OPENFIL - OPCODE >00 *
+************************
+PTCHAA CB   @PAB+9,@FIVE      Check for file name length = 0
+       JNE  OP00N1            Nope, so OPEN THE FILE!
+       LI   R1,>2600          Catalog wanted!
+       MOVB R1,@PAB+4         Write new default record length
+       B    @NOERR            Exit to DSKRTN
+
+OP00N1 BL   @OP09IN           Check STATUS of file to be OPENed
+       ABS  @FCB              Check if file is already OPENed
+       JNE  OP00R1            Yep, so exit to DMASK
+       MOVB @PAB+8,R1         Put current STATUS of the file in R1
+       MOVB @PAB+1,R2         Put OPEN/MODE of the PAB in R2
+       CZC  @ST0,R1           Does this file exist?
+       JEQ  OP00P1            Yep, so go on
+       CZC  @ST5,R2           Check if INPUT or UPDATE mode
+       JEQ  OP00P1            Nope, so go on
+       COC  @ST6,R2           Check if INPUT or UPDATE mode
+       JNE  DERRN3            ERROR: Can't read from non-exist file!
+
+; 96 byte table of open files
+; same PAB is used (in ROS) for all file access, only the 6 bytes per file really matter
+;
+; 3-20-2020
+; The OPEN code has a feature allowing the user to NOT specify the file type
+; for 'simplicity'.  It may be worth investigating the removal of this option
+; for other routines, since it makes any ramdisk-specific program incompatible
+; with all other devices.  
+;
+OP00P1 LI   R8,TABLE          Start at top of FCB BUFFER
+OP00P2 CB   @5(R8),@MASK+1    Check if this FCB is free
+       JEQ  OP00N2            Yep, so use it!
+       AI   R8,6              Nope, so point to the next FCB
+       CI   R8,PAB            Check if at end of FCB BUFFER
+       JL   OP00P2            Nope, so check next FCB
+       B    @ERRT4            Exit to ERROR >04
+
+OP00N2 MOV  R8,@AVLFCB+2      Save address of the free FCB in table
+       COC  @ST0,R1           Does this file exist?
+       JEQ  NOFLE             Nope, so skip over checking file type!
+       COC  @ST4,R1           Is the file a PGM?
+       JNE  OP00N3            Nope, so skip over the ERROR exit
+DERRN3 B    @ERRT7            ERROR, exit to the I/O ERROR program!
+
+OP00N3 COC  @ST3,R1           Is the file a INT?
+       JNE  OP00N4            Nope, so skip over the INTERNAL check
+       COC  @ST4,R2           Is the open/mode a INT?
+       JEQ  OP00N5            Yep, so skip over the ERROR exit
+OP00R1 B    @ERRT2            ERROR, exit to the I/O ERROR program!
+
+OP00N4 COC  @ST4,R2           Is the open/mode a DIS?
+       JEQ  OP00R1            Yep, so send ERROR message
+OP00N5 COC  @ST1,R1           Check if file is write protected
+       JNE  OP00N6            Nope, so skip over INPUT only check
+       COC  @ST5,R2           Check if INPUT open/mode
+       JNE  OP00R1            Nope, so send ERROR message
+       CZC  @ST6,R2           Check if INPUT open/mode
+       JNE  OP00R1            Nope, so send ERROR message
+OP00N6 COC  @ST5,R1           Is the file a VAR?
+       JNE  OP00N7            Nope, so skip over the VARIABLE check
+       COC  @ST3,R2           Is the open/mode a VAR?
+       JEQ  OP00N8            Yep, so skip over the ERROR exit
+       JMP  OP00R1            ERROR, exit to the I/O ERROR program!
+OP00N7 COC  @ST3,R2           Is the open/mode a FIX?
+       JEQ  OP00R1            Nope, so send ERROR message
+
+OP00N8 BL   @ADDRF            Bring up the FDB sector
+       BL   @WDEFLT           Write the default record length
+       AI   R6,17             Point to the FDB record length
+       CB   *R6,R1            Are they the same?
+       JNE  OP00R1            Nope, so send ERROR message
+NOFLE  MOVB @PAB+1,R3         Put the OPEN/MODE of the PAB in R3
+       BL   @WDEFLT           Write the default record length
+       CB   @FF00,R1          Is the length 255?
+       JNE  OP00M2            Nope, so skip over VARIABLE check
+       COC  @ST3,R3           Check if open/mode is VARIABLE
+       JEQ  OP00R1            Yep, so send ERROR message
+OP00M2 COC  @ST7,R3           Check if open/mode is RELATIVE
+       JNE  OP00M3            Nope, so skip over the FIXED fix!!
+       SZCB @ST3,R3     *JPH: FORCE RELATIVE FILE TO BE FIXED
+       MOVB R3,@PAB+1         Rewrite the new PAB type!
+OP00M3 COC  @ST5,R3           Check if open/mode is APPEND
+       JNE  OP00M4            Nope, so skip over the VARIABLE check
+       COC  @ST6,R3           Check if open/mode is APPEND
+       JNE  OP00M4            Nope, so skip over the VARIABLE check
+       COC  @ST3,R3           APPEND:   Is open/mode VARIABLE
+       JNE  OP00R1            Nope, so exit with ERROR message
+
+; After file is created (op00m6) we return here a second time for clusters
+
+OP00M4 MOVB @PAB+8,R1         Put current STATUS of the file in R1
+       MOVB @PAB+1,R2         Put OPEN/MODE of the PAB in R2
+       COC  @ST0,R1           Does the file exist?
+       JEQ  OP00M6            Nope, so jump to MAKE FDB
+
+       CZC  @ST5,R2           Check if open/mode is OUTPUT
+       JNE  OP00X3            Nope, so skip over the file wiper
+       COC  @ST6,R2           Check if open/mode is OUTPUT
+       JNE  OP00X3            Nope, so skip over the file wiper
+       BL   @CLUSTR           Update the BITMAP using FDB clusters
+       SZCB R7,*R6            Mark the FDB sectors free
+       BL   @ADDRF            Bring up the FDB sector
+       BL   @RMCLST           Remove all clusters and update size
+OP00X3 BL   @ADDRF            Bring up the FDB sector
+AVLFCB LI   R8,>0000          TABLE address of the free FCB
+       SETO *R8+              Reset the current logical record offset
+       MOV  @FDBSEC,*R8+      Load the FCB with the FDB sector number
+       MOV  @DRIVE,*R8        Reset the EOF offset & Load the drive #
+       MOVB @PAB+1,R1         Get the current flag/status byte
+       COC  @ST5,R1           Check if opened in APPEND mode
+       JNE  OP00X4            Nope, so skip over FCB changer
+       COC  @ST6,R1           Check if opened in APPEND mode
+       JNE  OP00X4            Nope, so skip over FCB changer
+       AI   R6,14             Yep, so point to number of sectors used
+       MOV  *R6+,R1           Get the size of this file
+       DEC  R1                Point to the last RELSEC#
+       MOV  R1,@-4(R8)        Set CLROS to the last sector number
+       MOVB *R6,*R8           Set EOFOS to the End Of File OffSet
+OP00X4 JMP  NOERR             Exit with no errors
+
+; start file creation since the file does not exist yet
+OP00M6 LI   R11,INFO          Point to the start of the INFO in PAD
+       MOV  @PAB+2,*R11+      Write buffer address into INFO
+       CLR  *R11+             ZERO sectors in this file into INFO+2
+       CLR  R2                Make sure R2 is >0000 for SOCB's below
+       MOVB @PAB+1,R1         Put OPEN/MODE of the PAB into R1
+       CZC  @ST4,R1           Check if INTERNAL type
+       JEQ  OP00M7            Nope, so skip over INTERNAL maker
+       SOCB @ST6,R2           Set INTERNAL bit in new FDB sector
+OP00M7 CZC  @ST3,R1           Check if VARIABLE type
+       JEQ  OP00M8            Nope, so skip over VARIABLE maker
+       SOCB @ST0,R2           Set VARIABLE bit in new FDB sector
+
+OP00M8 MOVB R2,*R11+          Write new file type for FDB into INFO+4
+       LI   R2,256            Max. of 256 bytes per sector
+       CLR  R1                Make sure R1 is >0000 for DIV below
+       MOVB @PAB+4,R0         Get max. record length in R0
+       SRL  R0,8              Make it a word
+       DIV  R0,R1             Divide 256 by max. record length
+       SWPB R1                Put the number of records/AU into MSByte
+       MOVB R1,*R11+          Put the number of records/AU into INFO+5
+       MOVB R0,*R11+          Put end of file offset into INFO+6
+       MOVB @PAB+4,*R11+      Put max. record length into INFO+7
+       CLR  *R11+             Put number of records  into INFO+8
+       BL   @MOVC             Setup the below OUT2 command  (sets ACCESS CODE=0)
+
+       BL   @OUT2             Write the new FDB sector to the diskette
+       MOVB @FAC+6,R0         Check if any errors
+       JNE  ERROR             Yep, so exit to the ERROR program
+       BL   @OP09IN           Done, so redo status of this file
+       JMP  OP00M4            Jump back up and finished the OPEN DSR
+*
+* RETURN WITH ERROR IN PAB STATUS BYTE
+*
+NOERR  SZCB @ERR7,@PAB+1      NO ERRORS (Clear Status)
+       JMP  DSKRTN
+ERRT7  MOVB @ERR7,R0          ERROR #7  (File Error)
+       JMP  ERROR
+ERRT5  MOVB @ERR5,R0          ERROR #5  (End of File)
+       JMP  ERROR
+ERRT4  MOVB @ERR4,R0          ERROR #4  (Out of Space)
+       JMP  ERROR
+ERRT2  MOVB @ERR2,R0          ERROR #2  (Bad Open Attr.)
+       JMP  ERROR
+ERRT1  MOVB @ERR1,R0          ERROR #1  (Write Protected)
+ERROR  SOCB R0,@PAB+1         Set the status in bits 0-2
+DSKRTN MOV  @SAVLEN,R8        Get pointer to the VDP PAB
+       AI   R8,-13            Point to PAB+1 in VDP
+       BL   *R15              Setup VDP write address
+       LI   R1,PAB+1          Point to PAB+1 in CPU
+       LI   R2,8              8 bytes of PAB to rewrite
+WRTPAB MOVB *R1+,*R14         Write a byte of the PAB to VDP
+       DEC  R2                Check if finished
+       JNE  WRTPAB            Nope, so write some more
+       B    @GPRTN            Yep, so EXIT THE DSR
+
+************************
+* CLOSE   - OPCODE >01 *
+************************
+PTCH8  LI   R11,NOERR         EXTERNAL return address
+OP01IN MOV  R11,@OP01ZZ+2     Save INT/EXT return address
+       CB   @PAB+9,@FIVE      Check if CATALOG mode active
+       JEQ  OP01ZZ            Yep, so skip over the CLOSE of a file
+       BL   @OP09IN           Check to see if the file is opened  (STATUS OPCODE)
+       MOV  @FCB,R8           Put FCB address into R8
+       JEQ  ERRT7             If ZERO, then file is not opened! ERROR!
+       CLR  @4(R8)            Clear the DRIVE # and EOF offset!
+OP01ZZ B    @>0000            RETURN TO CALLING PROGRAM
+
+************************
+* READ    - OPCODE >02 *
+************************
+PTCHC  SETO @SV5              Set FLAG to READ mode
+       CB   @PAB+9,@FIVE      Check if CATALOG mode active (len of dev.file is 5)
+       JEQ  OP2NO1            Yep, so skip over branch to READ A RECORD
+       B    @OP02N1           BRANCH TO THE READ A RECORD MODE
+*
+* READ A RECORD OF THE CATALOG!!!
+*
+OP2NO1 LI   R8,BUFFER         Address of the ROS buffer
+       CLR  R2                Clear length counter
+       MOV  @PAB+6,R4         Get current file number to READ in
+       JEQ  OP2NO8            If ZERO, then skip to the DISKNAME READ
+       BL   @COUNT            Count the number of files on the diskette
+       INCT R11               Correct pointer for the compar below
+       C    R4,R11            Check if trying to read pass the END!
+       JHE  ERRT5             Yep, so send ERROR message back
+       BL   @ADDR1            Bring up the CATALOG (SECTOR #1)
+       DEC  R4                Correct pointer for the calc below
+       SLA  R4,1              Times 2 since 2 bytes per entry per file
+       A    R4,R6             Point to the correct entry in SECTOR #1
+       MOV  *R6,R4            Get the sector number of the FDB
+       JEQ  OP2ZM0            If ZERO, then no string to make up
+
+; for disk name/info, R4=0 (current file number above)
+OP2NO8 MOV  R4,@FDBSEC        Store the FDB sector number for ADDRF
+       BL   @ADDRF            Bring up the FDB sector for this file
+       MOV  R6,R1             Save pointer to name for later use
+       LI   R3,10             Max. of ten chars in the name
+CNTLP  CB   *R1+,@SPACE       Check if at the end of the name yet
+       JEQ  OP2ZM0            Yep, so exit name length counter
+       INC  R2                Nope, so count this byte of the name
+       DEC  R3                Check if at the end of the name yet
+       JNE  CNTLP             Nope, so check some more of the name
+OP2ZM0 SWPB R2                Done, put length into the MSByte
+       MOVB R2,*R8+           Write name length into the buffer
+       SWPB R2                Put length back into the LSByte
+       MOV  R2,R4             Put name length into total length counter
+       AI   R4,28             Add min. length of record to total length
+       MOV  R6,R1             Save pointer to name for later use
+OP2ZL1 DEC  R2                Check if finished writing name to buffer
+       JNC  OP2ZM1            Yep, so exit the name writer
+       MOVB *R1+,*R8+         Nope, so write another byte of the name
+       JMP  OP2ZL1            Jump back up and check if finished yet!
+
+OP2ZM1 CLR  @FLAG             Following RADIX numbers are not negative
+       MOV  @PAB+6,R1         Check if doing record 0 (DISKNAME)
+       JNE  OP2NO9            Nope, so jump to FILENAME section
+
+;catalog record 0
+       CLR  R2                Record type is ZERO
+       BL   @RADIX            Convert R2 into RADIX 100 and store it
+       MOV  @10(R6),R2        Put the size of this diskette into R2
+       BL   @RADIX            Convert R2 into RADIX 100 and store it
+       CLR  R2                Assume no sectors free
+       AI   R6,56             Point to start of BITMAP table
+GETNXT MOV  *R6+,R7           Get a word of the BITMAP
+       CI   R6,>5902          Check if at the end of the BITMAP
+       JEQ  OP2ZN2            Yep, so exit free counter
+       LI   R1,16             Max. of 16 sectors in this word
+SAGAIN SLA  R7,1              Check if a sector is used
+       JOC  SUSED             Jump over INC  R2 if used
+       INC  R2                Free, so count it
+
+*-- 3.10.2012- Correct OPEN #x:"DSKy.",IF  bitmap for catalog file
+       C    @FORSEC,@D1600    >1600?
+       JLE  SUSED             no
+       INC  R2                yes, double sector count free (2 sec/AU)
+*-------
+SUSED  DEC  R1                Check if this word used up
+       JNE  SAGAIN            Nope, so check next sector
+       JMP  GETNXT            Yep, so get another word from the BITMAP
+
+OP2NO9 CI   R4,28             Is there a file to read info on?
+       JNE  OP2NOA            Yep, so skip over blank record maker
+       CLR  R2                Nope, so send back all ZEROs
+       BL   @RADIX            Convert R2 into RADIX 100 and store it
+       BL   @RADIX            Convert R2 into RADIX 100 and store it
+       JMP  OP2ZN2            Done with the string, so transfer it
+
+OP2NOA AI   R6,12             Point to the status of this file
+       MOVB *R6,R1            R1 = FV, 0, 0, 0,NP, 0,DI,DP MSByte
+
+* correct level 3 catalog for files w/backup bit set!
+       ANDI R1,>8B00     2.19.2012tt  8 0 0 0|8 4 2 1 Mask Myarc bit
+
+       MOV  R1,R2             R2 = FV, 0, 0, 0,NP, 0,DI,DP MSByte
+       ANDI R1,>0800          R1 =  0, 0, 0, 0,NP, 0, 0, 0 MSByte
+       JEQ  NOTPRO            File is not protected, so skip the change
+       SETO @FLAG             PROTECTED: So change to negative numbers
+NOTPRO SZCB R1,R2             R2 = FV, 0, 0, 0, 0, 0,DI,DP MSByte
+       SRL  R2,8              R2 = FV, 0, 0, 0, 0, 0,DI,DP LSByte
+       INC  R2                R2 = 01=DF,02=PGM,03=IF,81=DV,83=IV
+       CI   R2,2              Check if PROGRAM type
+       JNE  TYPDAT            Nope, so file is a DATA file
+       AI   R2,3              Yep, so make R2 equal to 05
+TYPDAT CI   R2,8              Check if VARIABLE type
+       JL   TYPFIX            Nope, so file is a FIXED type
+       AI   R2,>FF81          R2 =  1=DF, 2=DV, 3=IF, 4=IV, 5=PGM
+TYPFIX BL   @RADIX            Convert R2 into RADIX 100 and store it
+       CLR  @FLAG             No more negative numbers!
+       INCT R6                Point to the size of the file
+       MOV  *R6+,R2           Put the size of the file into R2
+       INC  R2                Add one to size to count the FDB sector
+       BL   @RADIX            Convert R2 into RADIX 100 and store it
+       INC  R6                Point to the max. record length
+       MOVB *R6,R2            Get the max. record length for this file
+       SRL  R2,8              Make it a word
+OP2ZN2 BL   @RADIX            Convert R2 into RADIX 100 and store it
+       MOV  R4,R0             Put length of the catalog record in R0
+       LI   R6,BUFFER         Load R6 with the start of the ROS buffer
+       JMP  OP2ZN3            TRANSFER THE RECORD, AND EXIT THE DSR
+*
+* READ A RECORD OF A FILE!!
+*
+; OP09IN 
+OP02N1 BL   @OP09IN           Get the current status of the file
+       ABS  @FCB              Check if the file is open
+       JEQ  OP02N2            Nope, so exit to ERROR program
+       MOVB @PAB+1,R1         Put OPEN/MODE of the PAB into R1
+       CZC  @ST6,R1           Check if INPUT or UPDATE mode
+       JEQ  OP02N3            Yep, so skip over ERROR program
+       BL   @OP01IN           Nope, so close the file
+OP02N2 B    @ERRT2            ERROR: Send I/O ERROR message
+OP02N3 MOVB @PAB+8,R1         Get the status of this file
+       COC  @ST7,R1           Check if at end of file
+       JNE  OP02N4            Nope, so skip over ERROR program
+       BL   @OP01IN           Yep, so close the file
+       B    @ERRT5            ERROR: Send I/O ERROR message
+OP02N4 COC  @ST5,R1           Check if file is a VARIABLE type
+       JEQ  OP02N6            Yep, so jump to VARIABLE TRANSFER program
+
+
+
+; Also from OP03F2, to write a new fixed record. How does it know!
+OP02N5 BL   @FIXTRN           Nope, so get the fixed record to be READ
+OP2ZN3 BL   @BFTRAN           TRANSFER THE RECORD TO VDP/CPU MEMORY
+       INC  @PAB+6            Point to the next record to be READ
+       JMP  OP02ZZ            EXIT THE DSR, WITH NO ERRORS
+*
+* TRANSFER A RECORD FOR A VARIABLE FILE
+*
+OP02N6 BL   @CLROFF           Get current logical record offset R3
+       JLT  OP02N7            If >FFFF, then start at the next sector
+       BL   @ADDRF            Bring up the FDB sector
+       BL   @GETAU            Calc the sector wanted in the file
+       MOV  R4,R6             Check if any errors
+       JEQ  VARERR            Yep, so exit to ERROR program
+       BL   @ADDR             Bring up the sector needed
+       MOV  @FCB,R8           Get the address of the FCB for this file
+       MOVB @4(R8),R1         Get the end of file offset
+       SRL  R1,8              Make it a word
+       A    R1,R6             Point to the last byte used in this AU
+       ABS  @SV5              Check if READ TRANSFER mode
+       JNE  OP02X1            Yep, so get/write length byte
+       MOVB @PAB+5,R0         Nope, so get length of the new record
+       MOVB R0,*R6+           Write the new length to the sector
+       JMP  OP02N8            WRITE THE RECORD TO THE SECTOR
+
+OP02X1 MOVB *R6+,R0           Get length of record to read
+       CB   R0,@FF00          Check if at end of this sector
+       JNE  OP02N8            Nope, so READ THE RECORD FROM THE SECTOR
+
+OP02N7 INC  R3                Point to the next sector in the file
+       MOV  @FCB,R8           Get the address of the FCB for this file
+       MOV  R3,*R8            Change the CURRENT LOGICAL RECORD OFFSET
+       MOVB @MASK+1,@4(R8)    Make the END OF FILE OFFSET equal to ZERO
+       JMP  OP02N6            RESTART TRANSFER OF THIS RECORD
+
+OP02N8 SRL  R0,8              Make record length in R0 a word
+       BL   @BFTRAN           TRANSFER THE RECORD
+       ABS  @SV5              Check if READ TRANSFER MODE
+       JNE  OP02X2            Yep, so skip over marking the end of AU
+       MOVB @FF00,*R6         Nope, so write new end of this sector
+
+OP02X2 MOV  @FCB,R8           Get the address of the FCB for this file
+       C    *R8+,*R8+         Point to end of file offset in the FCB
+       AB   @PAB+5,*R8        Add record length transfered to the EOFOS
+       AB   @ST7,*R8          Add 1 to EOFOS, to count the length byte!
+       ABS  @SV5              Check if READ TRANSFER MODE
+       JNE  OP02ZZ            Yep, so skip over marking the end of AU
+       BL   @ADDRF            Bring up the FDB sector
+       MOVB *R8,@16(R6)       Write the new end of file offset in FDB
+OP02ZZ B    @NOERR            EXIT THE DSR, WITH NO ERRORS
+
+VARERR BL   @OP01IN           ERROR IN TRANSFER, so close the file
+       B    @ERRT7            EXIT THE DSR, WITH I/O ERROR MESSAGE
+
+************************
+* WRITE   - OPCODE >03 *
+************************
+OP03NX BL   @OP09IN           Get the current status for this file
+       ABS  @FCB              Check if the file is opened
+       JEQ  OP03M3            Nope, so send ERROR message
+       ABS  @WTPR             Is the diskette write protected?
+       JNE  OP03M4            Yep, so send ERROR message
+       MOVB @PAB+8,R2         Put current status of the file into R2
+       COC  @ST1,R2           Check if the file is protected
+       JEQ  OP03M4            Yep, so send ERROR message
+       MOVB @PAB+1,R1         Put OPEN/MODE of the PAB into R1
+       CZC  @ST5,R1           Check if INPUT mode active
+       JEQ  OP03N3            Nope, so skip over ERROR program
+       COC  @ST6,R1           Check if INPUT mode active
+       JEQ  OP03N3            Nope, so skip over ERROR program
+       BL   @OP01IN           Yep, so close the file, send ERROR msg.
+OP03M3 B    @ERRT2            ERROR: Send I/O ERROR message back
+OP03M4 BL   @OP01IN           Write protected, so close the file
+       B    @ERRT1            ERROR: Send I/O ERROR message back
+OP03N3 CLR  @SV5              WRITE MODE FOR TRANSFER RECORD PROGRAM
+       COC  @ST5,R2           Check if variable type file
+       JEQ  OP03V0            Yep, so jump VARIABLE TRANSFER
+
+*-----------------------------------------------------------------
+* WRITE A RECORD TO A FIXED FILE
+*
+       COC  @ST7,R2           FIXED: Check if at end of file
+       JNE  OP03F2            Nope, so skip over make room section
+       BL   @ADDRF            Bring up the FDB sector
+       AI   R6,13             Point to the records per sector
+       MOVB *R6+,R0           Get the number of records per sector
+       SRL  R0,8              Make it a word
+       MOV  *R6+,R3           Get the current size of the file
+       INCT R6                Point to the number of fixed records
+       CLR  R1                Clear R1 for DIVIDE below
+       MOV  @PAB+6,R2         Get record number to be written
+       INC  R2                Add 1 since record numbers start at ZERO
+       SWPB R2                Swap the bytes since NOFR are reversed
+       MOV  R2,*R6+           Write the new number of fixed records
+       SWPB R2                Restore the bytes to the right order
+       DIV  R0,R1             Divide record number by records per AU
+       MOV  R2,R2             Is there a remainder
+       JEQ  OP3F1             Nope, so don't need a extra sector
+       INC  R1                Remainder, so add one more sector
+OP3F1  S    R3,R1             R1 contains number of sectors to be added
+       JEQ  OP03F2            If ZERO, then skip over sector adder
+       MOV  R1,R5             Save the counter into R5
+
+; ADDS A SECTOR TO THE FILE: 
+
+OP3LL1 BL   @ADDSEC           ADD A SECTOR TO THE FILE
+       DEC  R5                Check if finished
+       JNE  OP3LL1            Nope, so add some more
+OP03F2 B    @OP02N5           Done, so write the new fixed record
+*----------------------------------------------------------------
+
+*
+* WRITE A RECORD TO A VARIABLE FILE
+*
+OP03V0 COC  @ST7,R2           Check if at the end of the file
+       JEQ  OP3V0             Yep, so skip over micro-deleter
+       BL   @CLUSTR           Update the BITMAP using the FDB clusters
+       SZCB R7,*R6            Mark the sectors as FREE
+       BL   @ADDRF            Bring up the FDB sector
+       BL   @CLROFF           Put current logical record offset into R3
+       JLT  OPX3V1            If >FFFF, then delete the whole file!
+       JMP  OPX3V3            Not >FFFF, so delete after this record
+OPX3V1 SOCB @ST7,@PAB+8       Tell the ROS we are really at the EOF
+       BL   @RMCLST           Remove all clusters and update the size
+       JMP  OP03V3            WRITE THE NEW RECORD TO THE EMPTY FILE!
+OPX3V3 AI   R6,28             Point to the first cluster in the FDB
+OP3LP1 BL   @MKCLST           Make up a cluster
+       MOV  R1,R8             Save SS into R8 for BDCLST
+       JEQ  OP03M3            If SS in ZERO, then ERROR!
+       C    R3,R2             Is new offset > cluster offset?
+       JGT  OP3LP1            Yep, so check next cluster
+       MOV  R3,R1             Save new offset for later use
+       MOV  R6,R10            Put the cluster address into R10
+       AI   R10,-3            Point to the last cluster used
+       BL   @BDCLST           Build up a new cluster in the FDB sector
+       BL   @MTCLST           Wipe out all the other clusters
+       BL   @ADDRF            Bring back up the FDB sector
+       INC  R1                Size of the file is 1 more than the OF
+       MOV  R1,@14(R6)        Write the new size into the FDB sector
+       BL   @CLUSTR           Update the BITMAP using the FDB clusters
+       SOCB R7,*R6            Mark the sectors as USED
+OP3V0  BL   @CLROFF           Put current logical record offset into R3
+       JLT  OP03V3            If >FFFF, don't check for room on this AU
+       MOVB @PAB+5,R1         Get length of record to be written
+       SRL  R1,8              Make it a word
+SECSPC EQU  $+2               Point to the >0000 in the line below
+       CI   R1,>0000          Check if room on this sector
+       JL   OP03V2            Yep, so don't add a another sector
+OP03V3 BL   @ADDSEC           No room in the file, so add a sector
+       MOV  *R6+,R8           Get current size of the file
+       INCT R6                Point to the number of sectors used
+       SWPB R8                Swap the bytes since they are reversed
+       MOV  R8,*R6            Make sure used size equals real size!
+       BL   @CLROFF           Put current logical record offset into R3
+       B    @OP02N7           WRITE THE RECORD TO THE FILE
+OP03V2 B    @OP02N6           WRITE THE RECORD TO THE FILE
+
+************************
+* RESTORE - OPCODE >04 *
+************************
+PTCH6  BL   @OP09IN           Get the current status of this file
+       MOV  @FCB,R0           Check if the file is opened
+       JEQ  PTERR1            Nope, so send back an ERROR message
+       MOVB @PAB+1,R1         Put OPEN/MODE of the PAB into R1
+       CZC  @ST6,R1           Check if INPUT or UPDATE mode
+       JNE  PT2ERR            Nope, so send back an ERROR message
+       COC  @ST7,R1           Check if RELATIVE file type
+       JEQ  OP04N3            Yep, so skip over the reset of the FCB
+       CLR  @PAB+6            Nope, so reset the record number to ZERO
+       SETO *R0+              Reset the current logical record offset
+       INCT R0                Point to the end of file offset
+       MOVB @MASK+1,*R0       Reset the end of file offset in the FCB
+OP04N3 B    @NOERR            Done, so exit the DSR with no errors
+
+************************
+* LOADPGM - OPCODE >05 *
+************************
+PTCH2  MOV  @PAB+2,@INFO      Write the address of the buffer into INFO
+       BL   @MOVC             Setup the below INPT command
+       BL   @INPT             Get the FDB for the file to be loaded
+       MOVB @INFO+4,R1        Get the status/type of file
+       CZC  @ST7,R1           Check if a program type file
+       JEQ  PTERR             Nope, so send back ERROR message
+       MOVB @INFO+3,@FAC+3    Get number of sectors in the file
+       BL   @MOVD             Setup the below INPT command
+       BL   @INPT             TRANSFER THE FILE TO VDP/CPU MEMORY
+       JMP  RTNX4Z            Check if any errors during transfer
+
+************************
+* SAVEPGM - OPCODE >06 *
+************************
+PTCH3  MOV  @PAB+2,@INFO      Write the address of the buffer into INFO
+       BL   @MOVC             Setup the below OUT2 command
+       MOVB @PAB+6,@INFO+2    Write the number of sectors into INFO+2
+       SWPB @INFO+2           Swap the bytes of INFO+2 and INFO+3
+       CLR  @INFO+6           ????
+       MOVB @PAB+7,@INFO+6    Write the end of file offset info INFO+7
+       JEQ  OP06N2            If ZERO, then skip over adding extra AU
+       INC  @INFO+2           Not ZERO, then add another AU to INFO+2
+OP06N2 MOV  @FSPGM,@INFO+4    ????
+       CLR  @INFO+8           ????
+       BL   @OUT2             Write the new FDB sector needed
+       MOVB @FAC+6,R0         Check if any errors
+       JNE  PTERR             Yep, so exit with I/O ERROR message
+       MOV  @PAB+2,@INFO      Write the address of the buffer into INFO
+       MOVB @PAB+6,@FAC+3     Write the number of sectors to saved
+       MOVB @PAB+7,@INFO+6    Write the end of file offset into INFO+6
+       JEQ  OP06N3            If ZERO, then skip over adding extra AU
+       INC  @FAC+2            Not ZERO, then add another AU to FAC+2
+OP06N3 BL   @MOVD             Setup the below OUT2 command
+       MOVB @FSPGM,@INFO+4    ????
+       BL   @OUT2             Write the sectors of the new file to disk
+RTNX4Z MOVB @FAC+6,R0         Check if any errors
+       JNE  PTERR             Yep, so exit with I/O ERROR message
+       B    @NOERR            NO ERRORS, EXIT THE DSR
+*
+* RETURN WITH ERROR IN PAB STATUS BYTE
+*
+PT2ERR BL   @OP01IN           ERROR plus also close the file
+PTERR1 B    @ERRT2            ERROR - BAD OPEN ATTRIBUTE
+PTERR  B    @ERRT7            ERROR - FILE/DISK I/O ERROR
+PROER1 BL   @OP01IN           ERROR plus also close the file
+PROERR B    @ERRT1            ERROR - WRITE PROTECTION
+
+************************
+* DELETE  - OPCODE >07 *
+************************
+PTCH5  BL   @OP09IN           Get the current status of this file
+       ABS  @FCB              Check if this file is opened
+       JEQ  OP07L1            Nope, so it's ok to delete it!
+       BL   @OP01IN           Yep, so close the file first
+       BL   @OP09IN           Redo the status of this file
+OP07L1 ABS  @WTPR             Is the diskette write protected
+       JNE  PROERR            Yep, so exit to ERROR program
+       MOVB @PAB+8,R1         Nope, so get status of this file
+       COC  @ST0,R1           Does the file exist?
+       JEQ  PTERR             Nope, so exit to ERROR program
+       COC  @ST1,R1           Yep, so is the file protected
+       JEQ  PROERR            Yep, so exit to ERROR program
+; 1. Free FDB
+; 2. Free sectors used by the file
+; 3. Count total files 
+; 4. Update sector 1 by removing pointer to this file
+; 
+       MOV  @FDBSEC,R0        Put the sector number of the FDB in R0
+
+       BL   @UPDATE           Free up the FDB sector for this file
+       SZCB R7,*R6       ***  DATA for the above branch
+
+       BL   @CLUSTR           Free up all the sectors used in the file
+       SZCB R7,*R6       ***  DATA for the above branch
+
+       BL   @COUNT            Count the number of files on the diskette
+       MOV  R11,R3            Save total file count for later use
+       BL   @ADDR1            Bring up the catalog sector #1
+PNTCNT EQU  $+2               Point to the >0000 below
+       LI   R1,>0000          Get the pointer to the file in sector #1
+       S    R1,R3             Make R3 = to the number of files to move
+       DEC  R1                Point to the file above the DELETED file
+       SLA  R1,1              Times 2 since 2 bytes per entry per file
+       A    R6,R1             Point to the starting address in sec #01
+       MOV  R1,R2             Copy starting address into R2
+       INCT R2                Make R2 = to the word after R1
+OP07L2 MOV  *R2+,*R1+         Move a word of the catalog up one word
+       DEC  R3                Check if finished
+       JOC  OP07L2            Nope, so move some more
+OP07N4 B    @NOERR            DONE, so exit with no ERRORS!
+
+************************
+* SCRATCH - OPCODE >08 *
+************************
+OP08IN BL   @OP09IN           Get current STATUS of file
+       ABS  @FCB              Is the file opened?
+       JEQ  PTERR             Nope, so send ERROR msg.
+       ABS  @WTPR             Is the disk write protected?
+       JNE  PROER1            Yep, so send ERROR msg.
+       MOVB @PAB+8,R1         Get STATUS byte for file
+       COC  @ST1,R1           Is the file write protected?
+       JEQ  PROER1            Yep, so send ERROR msg.
+       MOVB @PAB+1,R1         Get OPEN mode of file
+       COC  @ST5,R1           Check if UPDATE active
+       JEQ  PTERR             Nope, so send ERROR msg.
+       COC  @ST6,R1           Check if UPDATE active
+       JEQ  PTERR             Nope, so send ERROR msg.
+OP08N1 BL   @ADDRF            Bring up the FCB sector
+       MOV  @18(R6),R2        Get current number of records
+       SWPB R2                They are stored in reversed
+       DEC  R2                Calc size after the SCRATCH
+       C    @PAB+6,R2         Check if finished
+       JLT  OP08N2            Nope, so scratch some more
+       SWPB R2                They are saved in reversed
+       MOV  R2,@18(R6)        Set new number of records
+       JMP  OP07N4            EXIT THE DSR
+OP08N2 INC  @PAB+6            Point to the REC to be READ
+       BL   @FIXTRN           Calc the page # and address
+       MOV  R6,R8             Save the address
+       MOV  R7,R10            Save the page #
+       DEC  @PAB+6            Point to the REC to be WRITE
+       BL   @FIXTRN           Calc the page # and address
+       INC  @PAB+6            Point to the next REC
+       C    R7,R10            Are the records on the same page
+       JNE  OP08N4            Nope, so move record thru buffer
+OP08N3 MOVB *R8+,*R6+         Move a byte of the record
+       DEC  R0                Check if finished
+       JNE  OP08N3            Nope, so move some more
+       JMP  OP08N1            Done, so check for another record
+OP08N4 LDCR R10,0             Bring in the READing page
+       LI   R9,BUFFER         Address of our CPU buffer
+       MOV  R0,R1             Save length for the WRITE
+OP08N5 MOVB *R8+,*R9+         Read a byte of the record
+       DEC  R0                Check if finished
+       JNE  OP08N5            Nope, so read some more
+       LDCR R7,0              Yep, so bring in the WRITing page
+       LI   R9,BUFFER         Address of our CPU buffer
+OP08N6 MOVB *R9+,*R6+         Write a byte of the record
+       DEC  R1                Check if finished
+       JNE  OP08N6            Nope, so write some more
+       JMP  OP08N1            Done, so check for another record
+*eof

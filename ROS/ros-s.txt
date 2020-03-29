@@ -1,0 +1,703 @@
+*
+* ROS-S
+*********************************************
+*                                           *
+*         RAMDISK OPERATING SYSTEM          *
+*                                           *
+* COPYRIGHT 1985, HORIZON COMPUTER, LIMITED *
+* COPYRIGHT 1988, BUD MILLS SERVICES        *
+* COPYRIGHT 1989, OASIS PENSIVE ABACUTORS   *
+*********************************************
+*                                           *
+* Updated 2012-2020, InsaneMultitasker (TT) *
+*                                           * 
+* Version 8.42c   14 March 2020             *
+*********************************************
+* Geneve Notes 3/1/2012:
+*      To test with Geneve, Load GPL and enable ROMPAGE (speed 2 w/Myarc FDC)
+*      CFG will *NOT* load ROS properly from SCSI controller
+*           (possible FAC problem. Need to investigate)
+* MODIFICATIONS FROM 8.14 to 8.14F:
+*    A1- WNUMB1:  ROS8.14F hardsets VDP dr#/file loc for TICC/Myarc @>8370
+*                        >3EDB TI/CorComp
+*                        >3EF6 Myarc
+*    A1- WNUMB0:  Check for SECIO NOP'd by ROS8.14F -but doing so disables
+*                 the CONTRL FAIL message. Wrong 8.14F? Validating.
+*
+*    S3- FAKE0:   "I Gotcha" changed to "CONTRL FAIL" however, routine
+*                 isn't called as noted above. Validating.
+*    S3- BTRUN:   Modified Routine to match 8.14F
+*    S3- BTLOG:   Modified release date and ROSTICC/ROSMYRK text
+*
+* VERSION 8.32:
+*      - Increased disk capacity from 1600 to 3200 sectors
+*      - Introduced masking of Myarc Backup Bit during direct file IO and
+*        catalog routine (status/read) operations.
+*
+*  NEEDED:
+*      - Updated >14 routine   (7.8 -huh?)
+*      - New filenames: ROSMYRC832 + ROSTICC832
+*      - or.. allow CFG to select and "cya" it.  Unified ROS?
+*      - space to add a catalog function?
+*  7.5.2015 Verified CRC functionality
+*  7.8.2015 Force CFG to clear CRC value once ROS is loaded to avoid
+*           XB or BASIC from executing whatever address is loaded
+*  7.8.2015 Finished VDP drive|filename research.  Added code to bypass
+*           writing to VDP unless x8370 is below 3FF8 to account for no
+*           floppy controller or incorrect VDP setup.  3eeB contains the drive
+*           number and is acceptable.  The two ROS versions (TI/Myarc) are no
+*           longer required since the drive/file was being copied into the VDP
+*           stack instead of the last 11 bytes of VDP.
+*           Since unusable by boot trackers as of ROS814F, code to be removed.
+* 7.8.2015  WNUMB contains the "I GOTCHA/CONTRLFAIL" code. Need to confirm this
+*           routine is dead and if so, remove.
+* 7.11.2015 Disabled the VDP disk/name writes to VDP for test purposes.
+*           EVPC AND BWG May alter VDP; need to review 8370 usage
+*
+* 5.2.2016  Version 8.34
+*           Set multicart/UberGROM cart ROM to bank #0 during powerup
+*           CTRL FAIL code still lives; review!
+*           VDP code cleanup required once validate!
+*
+* 5.7.2017  After assembling, clear last 4 bytes of file, then set FDR EOF byte
+*           from >FC to >00.  This will bypass the TI Disk Controlle LOAD(>05)
+*           opcode bug, triggered when file is within 255 bytes of >2000 (max)
+*
+* v8.38
+* 5.7.2017  Bugfix in bitmap allocation routine. FNDSEC routine was
+*           scanning past 3200 sectors, using the next drive for bitmap.
+*
+*12.9.2019  Confirmed source assembles/linkes with Ralphs XDT
+*           Reconciled and matches the 'released' 8.38 disk shared w/Atrax
+*           Removed DORG from here and the last 2K segment
+*
+* 1-11-2020 Added temporary RS232 debug code. See Powerup and "rs232debug.txt"
+*
+* 1/12/2020	The device table (DRIVE0) ties into the CALL table. DM2K sees calls twice.
+*               Why are the two linked?  Yes, to allow LD and DELETE to perform magic with
+*               file loading and CALLs.
+*
+* 1-12-2020	Beery suggested checking current file+free space before SAVE/OUTPUT removes the
+*		current cluster. (good idea - implemented)
+*
+* 1-13? 	ROS 8.41
+*	   	-Fixed record-based bitmap allocation errors
+*
+* 1-17-2020 	ROS 8.42
+*          	 - Removed all remaining VDP interference from WNUMB, PADLP routines.
+*      	   	 - Eliminated drive tracking VDP injection
+*         	 - Fixed fractured file deletion routine (cluster boundary condition)
+*         	 - Fixed SAVE and OUTPUT opcode allocation issues; optimization needed to
+*         	   activate both fixes.	
+*
+*		Fix program/direct output allocation routines 
+*		Fix severely fragmented file deletion bug
+* 		- CLUSTR and related routines rely upon last cluster==0. When full, routine continues.
+*		- boundery == end of FDR!
+* 		-Software Spec for 99/4A allows for 76 clusters (228 bytes) starting at offset 28.
+*		-  must ensure cluster creation does not exceed end of FDR
+*
+* 1-18-2020 	Review whether or not to clear Vregs 08-14 at powerup. (NO;may interfere)
+* 1-18-2020	Review FDB vs. FDR terminology. 
+* 1-18-2020	CALL MENU doesn't work from ubergrom 2.7XB cart; works with standard XB.GROM issue?
+*		My XB27 suite doesn't work with MENU or nonexistant calls. known  issue w/XB27
+*		See LDREGS for test code. 
+*
+* 1-19-2020	Retroclouds suggested a config option to display/not display ROS version at powerup.
+*               Decided to remove most of the display
+*
+* 1-24-2020 	Moved LNK routine into 2K space
+*		Could potentially move some of the powerup routine into 2k space if necessary
+*
+* 2-17-2020	HDX Trampoline consideration/idea
+*		Implement HDX DSR using extra DSR space (32K sram required)
+*		As our main ROS page.  HDX code would live there along with a routine to jump back to
+* 		the standard ROS page. When ROs is done, it would re-active the HDX page.
+*		Configure this on/off/
+*		Problem is that we simply do not have enough room in the DSR for the DEvice and opcode tables.
+*		not to mention the trampoline UNLESS we put the devices in the upper 2K along with a jump to
+*		another 6k page?  Or is it possible to bring RAMBO online to jump into a page there? 
+
+       TITL 'ROS 8.42 Unified '     2016
+       IDT  'ROS842c'
+
+       DEF  SFIRST,SLAST,SFREE1,SFREE2,PWRUP
+       DEF  CRCVAL       3/28/2014 tt
+*-----------------------
+*      LI   R8,>3EDB     CORCOMP/TI VDP for drive|filename ROS8.14F ROSTICC
+*      LI   R8,>3EF6     MYARC  VDP for drive|filename - ROS8.14F  ROSMYRK
+;;;VDPTOP EQU  >3EF6        set to Myarc  
+
+*-----------------------
+FAC    EQU  >834A             DSR Parms
+RTERRV EQU  >8350             Return Error Value
+NAMLEN EQU  >8356             Points to DSR name length byte
+INFO   EQU  >8360             DSR Parms
+STATUS EQU  >837C             GPL/DSR Status byte
+SRHADR EQU  >83D2             DSR Search address
+VDPR1  EQU  >83D4             Address of CPU copy of VDP R1
+GPLWS  EQU  >83E0             GPL/DSR workspace
+VDPRD  EQU  >8800             Address of VDP read  data
+VDPSTA EQU  >8802             Address of VDP read  status
+VDPWD  EQU  >8C00             Address of VDP write data
+VDPWA  EQU  >8C02             Address of VDP write address
+GRMRD  EQU  >9800             Address of GRM read  data
+GRMRA  EQU  >9802             Address of GRM read  address
+GRMWD  EQU  >9C00             Address of GRM write data
+GRMWA  EQU  >9C02             Address of GRM write address
+
+*****************************
+* ROS CFD Common Fixed Data * #0
+*****************************
+* 3/28/2014 - why is DORG used here instead of AORG? Can we change to AORG so
+*             there is no longer a need to sector-edit ROS?
+* 3/28/2014 - Install CRC after linkage; add routine to CFG to check for a
+*             value <>0 at the location. If a value,compute CRC and inform
+*             user of the results. Clear location when ROS is copied
+*             to RAMDISK.  Or, we could use it as a secondary validation.
+*                        * we will compute CRC @>4006 and clear when loading
+*                        * into RAMdisk
+* 7.5.2015  Verified with updated CFG.
+*
+
+; Removed DORG and changed to AORG for 'xdt' compatibility
+;;      DORG >4000             STARTING ADDRESS OF THE DSR MEMORY SPACE
+       AORG >4000
+       DATA >AA81         000 >AA = Valid DSR    >81 = Version 8.1
+       DATA >0000         002 NOT USED       * use for CRC? Clear via CFG?
+       DATA PWRUP         004 Address of the first POWER UP
+
+* Removed AORG; not needed with above DORG/AORG change. 12-2019
+;;      AORG >4006             STARTING ADDRESS FOR RAG LINKER 3 OUTPUT
+CRCVAL DATA >0000         006 CRC Placeholder [linkage only used by XB/BASIC]
+
+; CFG references this pointer +10 to grab the disk numbers when we save
+;   the parameters prior to loading a new ROS
+       DATA DRIVE0        008 High level DSR table	
+       DATA CALL1         00A Low  level DSR and CALL table
+       DATA USRINT        00C User Interrupt Service Routune
+DRIVE  DATA >0003         00E HOLDS NUMBER OF LAST DRIVE ACCESSED  (used by MENU 7.39 !)
+FORSEC DATA >05A0         010 MAXIUM NUMBER OF SECTORS IN THIS DRIVE
+WTPR   DATA >0000         012 WRITE PROTECT >0000 = NOT / >FFFF = YES
+LINK   DATA >0700         014 CRU ADDRESS OF 2ND PART OF DSR  (*** updated by CFG when ROs is loaded ! ! )
+COLOR  DATA >00F4         016 COLOR USED FOR AUTO-START PROGRAM
+OFSET  DATA >0009         018 CRU ADDRESS OF THE 1ST DRIVE CHIP
+BOSTAT DATA >0700         01A STATUS OF RAMBO PAGE MODE
+PGRAM  DATA >0000         01C Address of PGRAM, 0 if no PGRAM card
+VDPCPU DATA >0000         01E TRANSFER FLAG >0000 = VDP / >FFFF = CPU
+USRDSR DATA BOCALL,DSRUSR ;020 User DSR entry link header
+       BYTE >08           024 Length of the user DSR name
+       TEXT '01234567'    025 Max. of 8 chars for user DSR name
+       BYTE >00           02D NOT USED
+       DATA BO$OUT        02E Address of the user DSR code
+USRINT DATA >0000,INTUSR  030 User Interrupt entry link header
+       DATA >0000         034 No length / No name
+PWRUP  DATA PWRNXT,PWRIN  036 First Power-Up entry link header
+       DATA >0000         03A No length / No name
+USRPWR DATA BO$OUT        03C Address of the user POWER-UP code
+       DATA BO$OUT        03E Address of the user INT code
+;
+; 6 bytes per file; max 16 files open. See OPEN opcode label OP00P1
+;
+TABLE  BSS  96            040 Table of OPENed files
+PAB    BSS  15            0A0 Current DSR PAB  in use
+FILNME BSS  10            0AF Current FILENAME in use
+FLNAME BSS  11            0B9 Used by DSK. PAB access
+OCODE  DATA PTCHAA        0C4 Address of OPCODE >00 OPEN
+       DATA PTCH8         0C6 Address of OPCODE >01 CLOSE
+       DATA PTCHC         0C8 Address of OPCODE >02 READ
+       DATA OP03NX        0CA Address of OPCODE >03 WRITE
+       DATA PTCH6         0CC Address of OPCODE >04 RESTORE
+       DATA PTCH2         0CE Address of OPCODE >05 LOAD
+       DATA PTCH3         0D0 Address of OPCODE >06 SAVE
+       DATA PTCH5         0D2 Address of OPCODE >07 DELETE
+       DATA OP08IN        0D4 Address of OPCODE >08 SCRATCH
+       DATA OP09N0        0D6 Address of OPCODE >09 STATUS
+       DATA OP0AN0        0D8 Address of OPCODE >0A ASSEMBLY
+       DATA OP0BN0        0DA Address of OPCODE >0B BASIC
+       DATA OP0CN0        0DC Address of OPCODE >0C CARTRIDGE
+SAVLEN DATA >0000         0DE Saved NAMLEN for shorter names!
+HIWS   BSS  24            0E0 Workspace for all HORIZON code
+BASE   DATA >1000         R12 Address of the HORIZON card
+       DATA VDPRD         R13 VDP Read  Data
+       DATA VDPWD         R14 VDP Write Data
+       DATA VWWA          R15 VDP Write Address subprogram
+BUFFER BSS  256           100 Location of common buffer space
+
+*******************
+* Configure Table * #1
+*******************
+
+; WARNING: CFG derives this table's location by grabbing the CALL1 pointer
+;          from >A014, then subtracting (-46) from the address. Two routines.
+;          Do NOT change OFSTBL, PWRNXT, CALL1
+;
+OFSTBL DATA >0009,>0000       DRIVE INFO FOR disk 1
+       DATA >0000,>0000       DRIVE INFO FOR disk 2
+       DATA >0000,>0000       DRIVE INFO FOR disk 3
+       DATA >0000,>0000       DRIVE INFO FOR disk 4
+       DATA >0000,>0000       DRIVE INFO FOR disk 5
+       DATA >0000,>0000       DRIVE INFO FOR disk 6
+       DATA >0000,>0000       DRIVE INFO FOR disk 7
+       DATA >0000,>0000       DRIVE INFO FOR disk 8
+       DATA >0000,>0000       DRIVE INFO FOR disk 9
+       DATA >0000,>0000       DRIVE INFO FOR disk 10
+* The formula is:
+* total number of sectors from the start of the disk area
+* divided by 4.  Add 9 for 8k chips or 33 for 32k chips
+* This number us the start of the next disk.
+*
+* The table must end with >0000
+* If all ten disks are used the >0000 in the next line will be used.
+*
+* 7.9.2015 - Theoretically could expand the drive count.
+*             - validate available space
+*             - modify CFG to save/restore the additional drive info
+*             - adjust any pointer calcs and loops (set a maxdrv var)
+*             - expand the drive dsr table
+********************
+* Auto Start PWRUP * #2
+********************
+PWRNXT DATA >0000,PWRGO       Auto Start Power-Up
+       DATA >0000             No length / No name
+
+***********************
+* User Defined CALL's * #3
+***********************
+* 1.18.2020 - DSRLNK DATA 10 - starts with LDGO (below) 
+*	      and continues through DSR CALL table, level 2, and user ISR
+*             It is linked together with DATA 8 routines to allow for DELETE "CALL" usage
+*
+
+CALL1  DATA CALL2,LDPGM                 CALL #1   (AUTO-START)
+       BYTE 4,'M','E','N','U',' '
+CALL2  DATA CALL3,LDPGM                 CALL #2
+       BYTE 3,'M','G','R','1',' '
+CALL3  DATA CALL4,LDPGM                 CALL #3
+       BYTE 3,'C','F','G',' ',' '
+CALL4  DATA CALL5,LDPGM                 CALL #4
+       BYTE 2,'U','4',' ',' ',' '
+CALL5  DATA CALL6,LDPGM                 CALL #5
+       BYTE 2,'U','5',' ',' ',' '
+CALL6  DATA CALL7,LDPGM                 CALL #6
+       BYTE 2,'U','6',' ',' ',' '
+CALL7  DATA CALL8,LDPGM                 CALL #7
+       BYTE 2,'U','7',' ',' ',' '
+CALL8  DATA CALL9,LDPGM                 CALL #8
+       BYTE 2,'U','8',' ',' ',' '
+CALL9  DATA CALL10,LDPGM                CALL #9
+       BYTE 2,'U','9',' ',' ',' '
+
+******************
+* DSR CALL table * #4
+******************
+CALL10 DATA CALL11,LNK        Auto Start OFF
+       BYTE 2,'A','F',' '
+       DATA AUTOFF
+CALL11 DATA CALL12,LNK        Auto Start ON
+       BYTE 2,'A','O',' '
+       DATA AUTOON
+CALL12 DATA CALL13,LNK        Change Drive Number
+       BYTE 2,'D','N',' '
+       DATA DR1
+CALL13 DATA CALL14,LNK        Write Protect ON
+       BYTE 2,'W','O',' '
+       DATA WRPON
+CALL14 DATA NEXT0,LNK         Write Protect OFF
+       BYTE 2,'W','F',' '
+       DATA WRPOFF
+
+***********************
+* Low level DSR table * #5
+***********************
+NEXT0  DATA NEXT1,TEST,>0110,SECIO      Sector Input/Output
+NEXT1  DATA NEXT2,TEST,>0111,FORMAT     Format a Diskette
+NEXT2  DATA NEXT3,TEST,>0112,PROTCT     Modify File Protection
+NEXT3  DATA NEXT4,TEST,>0113,RENAME     Rename a File
+NEXT4  DATA NEXT5,TEST,>0114,INPUT      Direct File Input
+NEXT5  DATA USRDSR,TEST,>0115,OUTPUT    Direct File Output
+
+
+************************
+* High Level DSR table * #6
+************************
+* Table: Pointer to next entry, branch, len, name, value->30
+*
+* CFG clears the device number; only formatted drives have a #
+*
+; CFG grabs drive0 pointer from 4008, then adds 8 and saves
+; each drive number 2-byte combo.  When the new ROS is loaded,
+; these saved values are restored. 
+DRIVE0 DATA DRIVE2,DSTRT      DSKx. #1
+       BYTE 4,'D','S','K'
+DNUMB1 BYTE '5',5
+DRIVE2 DATA DRIVE3,DSTRT      DSKx. #2
+       BYTE 4,'D','S','K','6',6
+DRIVE3 DATA DRIVE4,DSTRT      DSKx. #3
+       BYTE 4,'D','S','K','7',7
+DRIVE4 DATA DRIVE5,DSTRT      DSKx. #4
+       BYTE 4,'D','S','K','8',8
+DRIVE5 DATA DRIVE6,DSTRT      DSKx. #5
+       BYTE 4,'D','S','K','9',9
+DRIVE6 DATA DRIVE7,DSTRT      DSKx. #6
+       BYTE 4,'D','S','K','A',17
+DRIVE7 DATA DRIVE8,DSTRT      DSKx. #7
+       BYTE 4,'D','S','K','B',18
+DRIVE8 DATA DRIVE9,DSTRT      DSKx. #8
+       BYTE 4,'D','S','K','C',19
+DRIVE9 DATA DRIVEA,DSTRT      DSKx. #9
+       BYTE 4,'D','S','K','D',20
+DRIVEA DATA NONMBR,DSTRT      DSKx. #10
+       BYTE 4,'D','S','K','E',21
+
+NONMBR DATA LDGO,FNAMEA       DSK.
+       BYTE 3,'D','S','K'
+*
+* 1-18-20 Is this a valid device? YES. LoadDirect. See operating manual.
+*
+LDGO   DATA CALL1,CALOAD      Load a file thru A/B/C
+       BYTE 2,'L','D'
+ZERO   BYTE '0'               PGRAM: First file char!
+
+*****************************
+* ROS MUD Misc Unfixed Data * #7
+*****************************
+ERR4   EQU  $                 ERROR: Diskette full
+ST0    DATA >8000             Used to check BIT #0
+ERR2   EQU  $                 ERROR: IO/file error
+MASK   EQU  $                 Used in different places
+ST1    DATA >4000             Used to check BIT #1
+ERR1   EQU  $                 ERROR: IO/disk error
+SPACE  EQU  $                 Used for SPACE check
+ST2    DATA >2000             Used to check BIT #2
+ST3    DATA >1000             Used to check BIT #3
+PRO    EQU  $                 Used to check protection
+ST4    DATA >0800             Used to check BIT #4
+ST5    DATA >0400             Used to check BIT #5
+ST6    DATA >0200             Used to check BIT #6
+ST7    DATA >0100             Used to check BIT #7
+
+FFFF   DATA >FFFF             Used by the ABC opcodes
+FF00   DATA >FF00             Used in different places
+FLAG   DATA >0000             Temp flag used in different places
+CCEXIT DATA >0B14,>0404       DATA needed to exit from CORCOMP scanner
+
+PGRM   BYTE >00               Current PGRAM control status!!!
+FIVE   BYTE >05               Length for catalog
+SIX    BYTE >06               Used to check if X/B cartridge installed
+DOT    BYTE >2E               Used by COMPARs
+WINFO  BYTE >60               >8300 offset of INFO buffer
+HEX83  BYTE >83               Used to check if CORCOMP Disk Controller
+ERR5   BYTE >A0               ERROR: Out of Space
+PGA5   BYTE >A5               PGRAM: Module RAM flag
+ERR6   BYTE >C0               ERROR: Device error
+ERR7   BYTE >E0               ERROR: File error
+VREGS  BYTE >00,>06,>01,>0E,>00,>B0,>00   VIDEO REGS 6-0
+       EVEN
+
+*****************
+* MENU POWER UP *
+*****************
+; Assembly opcode/call may enter here (LDPGM2)
+;
+; LDREGS MOV  @>6000,@>6000     ;1-18-20; ubergrom fix test. Not needed; see INIT
+
+LDREGS MOVB @COLOR+1,@VDPWA   Make TEXT mode the same color!
+       MOVB @VREGS+5,@VDPR1   Tell OS what VDP R1 will be set at
+       LI   R2,VREGS          Point to the table of VDP REGS
+       LI   R1,>8800          Start at the VDP R7
+LDREGT AI   R1,->0100         Point to the next VDP REG
+       MOVB R1,@VDPWA         Write the VDP REG number
+       CI   R1,>8000          Check if done VDP R0
+       JEQ  EXIT              Yep, so exit the VDP SETUP
+       MOVB *R2+,@VDPWA       Nope, so write the next DATA byte
+       JMP  LDREGT            Jump back and write the VDP REG number
+
+PWRGO  LDCR @LINK,0           Make sure 2K DSR in there
+       LWPI HIWS              Load our workspace
+       CLR  R12               Set CRU to CONSOLE space
+       TB   8                 Test for SHIFT key  (TI only)
+       JEQ  POWRP1            Not pressed, so BOOT
+       B    @NOTFND           Exit since SHIFT is pressed
+
+POWRP1 LI   R2,MENT           Load BOOT table
+LDEXIT MOV  *R2+,R0           Get address of BOOT code
+       MOV  R0,@SAVST         Save address for PAD branch
+       MOV  *R2+,R1           Get length of BOOT code
+POWRP2 MOV  *R2+,*R0+         Move a word of code
+       DECT R1                Check if finished
+       JNE  POWRP2            Nope, so move some more
+
+EXIT   LWPI GPLWS             Load GPL workspace
+       LI   R0,EXDATA         Point to the EXECUTER program
+       MOV  *R0+,R1           Move B *R2 into GPL R1
+       MOV  *R0+,R2           Move addr. into GPL R2
+       MOV  *R0,R0            Move SBZ 0 into GPL R0
+       B    R0                Run the EXECUTER
+EXDATA B    *R2               EXECUTER line #2    R1
+SAVST  DATA >0000             Data for GPL  R2    R2
+       SBZ  0                 EXECUTER line #1    R0
+
+*****************
+* INIT POWER UP *
+*****************
+* 5.2.2016  Set multicart/UberGROM to bank #0
+
+PWRIN  MOV  @LINK,@BOSTAT     Make sure RAMBO OFF
+       LDCR @LINK,0           Make sure 2K DSR is on
+
+       MOV  @>6000,@>6000     5.2; Multicart/Ubergrom bank set
+*                              **After RAMBO off to avoid conflict
+;;	BLWP @INITRS	;init
+;;	BLWP @XMTEXT	;  and send message
+;;	DATA INITXM1
+
+       LI   R0,TABLE          Start at top of OPEN/TABLE
+PWRIN0 CLR  *R0+              Clear a word of the table
+       CI   R0,PAB            At end of table yet?
+       JL   PWRIN0            Nope, so clear some more
+       LI   R2,PGLOOK         Load P-GRAM looker program
+       JMP  LDEXIT            Execute the P-GRAM looker
+
+RTLOOK MOV  R11,@RTPWR+2      Save RETURN ADDRESS for exit from USRPWR
+       LI   R11,RTPWR         Set  RETURN ADDRESS to RTPWR from USRPWR
+       MOV  @USRPWR,R1        Get address of the user POWER-UP code
+       B    @PWRUSR           Execute the user POWER-UP program
+
+RTPWR  LI   R11,>0000         RESTORE OLD RETURN ADDRESS
+       CB   R11,@HEX83        Check if CORCOMP Disk Controller active?
+       JNE  PWREND            Nope, so don't AUTO-DO second power-up
+       MOV  @PWRUP,R0         Yep, so check if second power-up active?
+       JNE  CCPWR             Yep, so run CORCOMP version of POWER-UP
+PWREND RT                     No CORCOMP, so exit normally
+
+CCPWR  LDCR @LINK,0           Make sure 2K DSR in there
+       LWPI HIWS              Load our workspace
+       CLR  R12               Set CRU to CONSOLE space
+       TB   8                 Test for SHIFT key
+       JEQ  CCPWR1            Not pressed, so BOOT
+       B    @NOTFND           Exit since SHIFT is pressed
+CCPWR1 MOV  @CCEXIT,@GPLWS+22  ;Load GPL R11 with the real return address
+       MOV  @CCEXIT+2,@>836C  Reset GPL scratch pad values
+       CLR  @>8354            Reset GPL scratch pad values
+       JMP  POWRP1            Continue with the NORMAL power-up code
+;
+; LNK Moved to 2k space 1-24-2020
+; The 2k partition MUST be active prior to branching to LNK2
+; Workspace must also be set. This was done to free up additional
+; space for the cluster allocation fixes.
+;
+;**************************
+;* Link to AF,AO,DN,WO,WF *
+;**************************
+LNK    LWPI HIWS              Load our workspace
+; next two lines are from WNUMB; must ensure 2K active BEFORE branching there
+       MOV  @GPLWS+24,R12     Get CRU address of this card
+       LDCR @LINK,0           Make sure 2K DSR PART IS ON!
+       B  @LNK2K		;hop into the routine in the 2k segment
+
+;;       MOV  @NAMLEN,@SAVLEN   Save the pointer
+;;       MOV  @SAVLEN,R8        Get pointer to '.'
+;;       BL   @VRWA             Setup VDP read address
+;;       CB   *R13,@DOT         Is there a '.' there
+;;       JNE  LNK3              Nope, so check pointer
+;;LNK1   MOVB *R13,R2           Yep, so get drive #
+;;LNK2   AI   R2,->3000         Convert ASCII # into a number
+;;       MOV  @SRHADR,R1        Get pointer to CALL table
+;;       MOV  @8(R1),R11        Get address of CALL program
+;;       JMP  WNUMB             Init the drive and run the program
+;;LNK3   MOVB @DNUMB1,R2        Use drive #1 if pointer is correct
+;;       MOVB *R13,R1           Skip over the CALL name
+;;       CB   *R13,@DOT         Is there a '.' now?
+;;       JNE  LNK2              Nope, so pointer is correct!
+;;       INCT @SAVLEN           Yep, so correct the pointer
+;;       JMP  LNK1              Jump back and get the real drive #!
+
+******************************
+* Link to >10,11,12,13,14,15 *
+******************************
+TEST   LWPI HIWS              Load our workspace
+       MOV  @SRHADR,R1        Get pointer to CALL table
+       MOV  @6(R1),R11        Get address of CALL program
+       MOVB @>834C,R2         Get drive # for this CALL
+       CLR  @VDPCPU           Assume VDP transfers
+       COC  @ST0,R2           Check if MSBit is SET
+       JNE  WNUMB             Nope, so use VDP transfer mode
+       SETO @VDPCPU           Yep, so switch to CPU transfers
+       SZCB @ST0,R2           Clear flag to get correct drive #
+
+******************
+* INIT THE DRIVE *
+******************
+;
+; 1-17-2020 VDP boot tracking removed from WNUMB
+; 
+
+WNUMB  MOVB R2,@DRIVE+1       Store # of current drive
+       MOV  @GPLWS+24,R12     Get CRU address of this card
+       LDCR @LINK,0           Make sure 2K DSR PART IS ON!
+       MOV  R11,R3            Save RETURN ADDRESS
+       CLR  R2                Point to first DRIVE in table
+
+       LI   R0,10             Check all 10 drives
+       LI   R1,DNUMB1+1       Start at the first DSK #
+WNUMB0 CB   *R1,@DRIVE+1      Is this the one we want?
+       JEQ  WNUMB1            Yep, so setup the DRIVE!
+       C    *R2+,*R2+         Nope, so point to the next DRIVE
+       AI   R1,10             And point to the next DSK #
+       DEC  R0                Are we done checking drives?
+       JNE  WNUMB0            Nope, so check some more!
+       JMP  NOTFND 	; removed iGOTCHA/CNTRLFAIL code 1-17-2020
+;
+; now set up the drive
+;
+WNUMB1 SETO @WTPR             Assume write protected
+       MOV  @OFSTBL(R2),R8    Get first page number
+       JLT  WNUMB2            Jump if write protected
+       JEQ  NOTFND            Incase of no drive, then exit!
+       CLR  @WTPR             Not WP, so clear flag
+WNUMB2 ABS  R8                Clear WP flag from page number
+       MOV  R8,@OFSET         Store FIRST DRIVE PAGE NUMBER
+       MOV  @OFSTBL+2(R2),@FORSEC   MAX. NUMBER OF SECTORS
+       JEQ  NOTFND            Incase of no drive, then exit!
+NOFDC  B    *R3               EXECUTE THE DSR PROGRAM
+
+******************
+* EXITS FROM DSR *
+******************
+GPRTN  INCT @GPLWS+22         DSR executed, so stop the search!
+NOTFND LWPI GPLWS             Load GPL workspace
+       LDCR @BOSTAT,0         Switch to current RAMBO page
+       RT                     EXIT TO THE DSR LNK program
+; If we arrive here from LNK->WNUMB, R11 holds the address of the routine.
+; So the above RT actually branches us to the right routine
+; Upon completion, each routine then cedes control to the GPL interpreter
+;
+
+********************
+* DSK. ENTRY POINT *
+********************
+FNAMEA LWPI HIWS              Load our workspace
+       BL   @GPAB             Get the DSR PAB from VDP
+       DATA 1                 Offset in from length of FIVE
+       LI   R3,>2E00          Use by the compar for DOT
+       LI   R4,DNUMB1-9       Start at the first drive
+       LI   R5,-4             Start at the first drive
+START2 LI   R0,10             Max. length of a diskname
+       MOV  R0,R1             Save the max. length
+       C    *R5+,*R5+         Point to the next drive
+       A    R1,R4             Point to the next drive
+       MOV  @OFSTBL(R5),R8    Get starting page number
+       JEQ  NOTFND            No more drives, so EXIT
+       LI   R6,>5800          Point to sector 0 of drive
+       CB   @MASK+1,@LINK+1   8 bit or 16 bit BUS
+       JNE  BELP0             Jump if 16 bits
+       SWPB R8                Swap if  8 bits
+BELP0  LDCR R8,0              Bring up the first page
+       LI   R8,FILNME-1       Point to the . after DSK
+BELP1  CB   *R8,R3            Are we at a '.' yet?
+       JEQ  BESTN2            Yep, so exit the compar
+       CB   *R8+,*R6+         Does the diskname match
+       JNE  START2            Nope, so check the next drive
+       DEC  R0                Check if finished compar
+       JNE  BELP1             Nope, so look at the rest
+       CB   *R8,R3            Did we reach a '.' yet
+       JEQ  BEFND             Yep, so 10 char diskname a-ok!
+BEERR  B    @ERRT7            Nope, so send ERROR MSG.
+BESTN2 C    R0,R1             Was there any chars in the name
+       JEQ  BEERR             Nope, so send ERROR MSG.
+       CB   *R6,@SPACE        Next char on ramdisk name a space
+       JNE  START2            Nope, so try next drive
+BEFND  INC  R8                Skip over the second '.'
+       MOVB @PAB+9,R2         Get length of device name
+       SRL  R2,8              Make it a word
+       AI   R2,-5             Sub length of DSK and two '.'
+       S    R0,R1             R1 = Length of diskname
+       S    R1,R2             R2 = Length of filename
+       MOV  R2,R0             R0 = Length of filename
+       AI   R0,5              R0 = PAB+9 minus diskname length
+       SWPB R0                Make it a byte
+       MOVB R0,@PAB+9         Save new length of device name
+       MOV  R2,R2             Check if any filename passed
+       JEQ  DSTRT0            Nope, so skip over name mover
+       LI   R0,FILNME         Point to new location for filename
+BELP2  MOVB *R8+,*R0+         Move a byte of the filename
+       DEC  R2                Check if finished
+       JNE  BELP2             Nope, so move some more
+       MOVB *R4,R2            Get current drive # in use
+       JMP  DSTRT0            Yep, so run the DSK DSR
+
+*********************
+* DSKx. ENTRY POINT *
+*********************
+DSTRT  LWPI HIWS              Load our workspace
+       BL   @GPAB             Get the DSR PAB from VDP
+       DATA 0                 Offset in from length of FIVE
+       MOVB @PAB+13,R2        Point to the drive # called
+       AI   R2,->3000         Calc offset from ASCII drive #
+
+**************************
+* DSK./DSKx. ENTRY POINT *
+**************************
+DSTRT0 BL   @WNUMB            INIT THE DRIVE
+       BL   @PADLP            Pad the name, and write it!
+       CLR  R1                Make sure below calcs work!
+       MOVB @PAB,R1           Get the DSR OPCODE
+       CLR  @VDPCPU           Assume VDP transfers
+       COC  @ST1,R1           Check if second MSBit SET
+       JNE  DSTRT1            Nope, so use VDP transfer mode
+       SETO @VDPCPU           Yep, so switch to CPU transfers
+       SZCB @ST1,R1           Clear the flag from the OPCODE
+DSTRT1 SRL  R1,7              Make it a word and * 2
+       CI   R1,>C*2           If OPCODE higher than >C
+       JGT  NOTFND            Then switch to the next card!
+       MOV  @OCODE(R1),R11    Else get address of OPCODE program
+       RT                     EXECUTE THE OPCODE
+
+********************
+* PAD the filename *
+********************
+; 1-17-2020, removed VDP filename insertion code. First disabled 7.8.2015
+;
+PADLP  MOVB @PAB+9,R2         Get length of device name
+       SRL  R2,8              Make it a word
+       LI   R1,15             Max. length of device name
+       S    R2,R1             R1 = Max. Length - Length
+       JLT  BEERR             If < 0 then send ERROR MSG.
+       JEQ  PADLP2            If = 0 then skip padder
+       LI   R2,PAB+24         Point to last byte of filename
+PADLP1 MOVB @SPACE,*R2        Pad a byte of the filename
+       DEC  R2                Point to the next last byte
+       DEC  R1                Check if finished
+       JNE  PADLP1            Nope, so pad some more
+PADLP2 RT
+
+
+**************************
+* Get PAB for DSK./DSKx. *
+**************************
+GPAB   MOV  @NAMLEN,@SAVLEN   Save the pointer
+       A    *R11+,@SAVLEN     Calc offset in from length of FIVE
+       MOV  R11,R10           Save the return address
+       MOV  @GPLWS+24,R12     Get old R12
+       MOV  @SAVLEN,R8        Pointer to decimal point
+       AI   R8,-14            Point to IO OP CODE in VDP RAM
+       BL   @VRWA             Setup VDP read address
+
+       LI   R0,35             35 bytes to move
+       LI   R1,PAB            Put data in PAB in card
+GPAB1  MOVB *R13,*R1+         Move data
+       DEC  R0                Count down
+       JNE  GPAB1             If not done get next
+       B    *R10              Return
+
+*********************
+* Setup VDP address *
+*********************
+VWWA   SOCB @MASK,R8          Indicate a write to VDP RAM mode
+VRWA   SWPB R8                Put the LSByte in the MSByte
+       MOVB R8,@VDPWA         Write LSByte of VDP RAM address
+       SWPB R8                Put the MSByte in the MSByte
+       MOVB R8,@VDPWA         Write MSByte of VDP RAM address
+       RT                     RETURN TO THE CALLING PROGRAM
+*eof

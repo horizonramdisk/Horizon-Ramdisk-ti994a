@@ -1,0 +1,980 @@
+* ROS-S2
+*********************************************
+*                                           *
+*         RAMDISK OPERATING SYSTEM          *
+*                                           *
+* COPYRIGHT 1985, HORIZON COMPUTER, LIMITED *
+* COPYRIGHT 1988, BUD MILLS SERVICES        *
+* COPYRIGHT 1989, OASIS PENSIVE ABACUTORS   *
+*********************************************
+*                                           *
+* Updated 2012-2020, InsaneMultitasker (TT) *
+*                                           * 
+* Version 8.42c   14 March 2020             *
+*********************************************
+* RECONCILED source to 8.14F
+*
+* VERSION 8.32
+* 2.20.2012 OP09N1: Mask backup bit during >09 Status opcode
+*           UPDATE: bitmap corrections for QUAD density allocation
+*           FNDSEC: Correct search for first free sector
+*           ADN1:   Test if we are adding sector within same cluster
+* 5.07.2017 FNDSEC, fixed quad density bitmap allocation error
+* 12.9.2019 Review opcode B/C for cartridge and XB compat with ubercart, finalgrom, etc
+* 1.11.2020 WARNING: Opcodes >B and >C removed for DSR testing. RS232 testing active 
+*	    v8.41 ADDSEC: Fixed (as far as I can tell from testing) the record-based allocation error
+*           opcodes restored
+* 1.12.2020 COUNT routine doesn't stop at 127 files. Consider adding a test.
+*           When cataloging nonexistant drive, takes FOREVER to return. 
+*           Is this a RAMdisk DSR issue or something else? 
+*
+* 1.19.2020 Identified two additional edge cases in the cluster routines.
+* 1.20.2020 fixes and edge case testing reviewed 
+*
+************************
+* STATUS  - OPCODE >09 *
+************************
+; This routine is a workhorse for other opcodes. 
+; It scans the open file TABLE, looks at each files FDB to determine
+; whether there is a match. Quite ingenious as it eliminates storing
+; of all the extra data for the file. 
+; 
+OP09N0 LI   R11,NOERR         EXT. RETURN ADDRESS
+OP09IN MOV  R11,@OP09RZ+2     Save INT/EXT RETURN ADDRESS
+       CLR  @FCB              Assume file not open
+       MOVB @ST0,R10          Assume file not found
+       MOV  @FF00,@SECSPC     Assume no bytes left in sector
+
+; Scan the table for this file
+       LI   R8,TABLE          Point to the top of the table
+PTCH70 CB   @5(R8),@DRIVE+1   Drive numbers match?
+       JNE  PTCH72            Nope, so check next entry
+       MOV  @2(R8),@FDBSEC    Yep, get the FDB sector number
+       BL   @ADDRF            Bring up the FDB sector
+       LI   R1,FILNME         Address of the PAB filename
+       LI   R4,10             Max. length of the filename
+       MOV  R6,R3             Save R6 for the OP09N1 code
+PTCH71 CB   *R3+,*R1+         Compar a byte of the name
+       JNE  PTCH72            Don't match, so check next entry
+       DEC  R4                Matched so far, are we finished?
+       JNE  PTCH71            Nope, so keep comparing
+       MOV  R8,@FCB           Matched, so saved the FCB pointer
+       JMP  OP09N1            Skip over the FILE SEARCH code
+PTCH72 AI   R8,6              Point to the next entry
+       CI   R8,PAB            Check if at end of table
+       JL   PTCH70            Nope, so check the next entry
+       BL   @SEARCH           Is there a file with this name?
+       JMP  OP09RM            Nope, so exit the STATUS OPCODE
+OP09N1 AI   R6,12             Yep, so point to file type
+       MOVB *R6,R10           Get the file type/status,etc.
+       SWPB R10               Swap the bytes
+       MOVB *R6,R10           Get the file type/status,etc.
+
+* 2.20.2012tt
+       ANDI R10,>EFEF         Myarc Backup Bit! Mask (may want to fix >14)
+
+       SLA  R10,3             Convert it to OPCODE status!
+       MOV  @FCB,R8           Check if file is OPENed
+       JEQ  OP09RM            Nope, so don't check EOF or EOD!
+       COC  @ST5,R10          Variable type file?
+       JNE  OP09N3            Nope, so jump to OP09N3
+       MOV  *R8,R1            Yep, so get CURRENT LOG REC OFFSET
+       INC  R1                Add 1 for compar below
+       MOV  @6(R6),R0         Get the real number of AU's used
+       SWPB R0                Swap them since they are reversed
+       C    R1,R0             Are they the same?
+       JLT  OP09RM            Nope, so not at the EOF
+       C    *R6+,*R6+         Point to the end of file offset
+       CB   @4(R8),*R6        Are they the same?
+       JNE  OP09RM            Nope, so not at the EOF
+       SB   *R6,@SECSPC       Calc number of bytes left in sector
+       SWPB @SECSPC           Swap bytes to make it a word
+       JMP  OP09N4            Check if out of room on the disk
+OP09N3 AI   R6,6              Fixed, so point to the number of records
+       MOV  *R6,R2            Get the current number of records
+       SWPB R2                Swap it since they are store in reversed
+       C    @PAB+6,R2         Are they the same?
+       JLT  OP09RM            Nope, so not at the EOF
+OP09N4 BL   @FNDSEC           Find the first free sector
+       MOV  R1,R1             Any room left on the disk?
+       JNE  OP09N5            Yep, so EOF but not EODf
+       SOCB @ST6,R10          PHYSICAL END OF DEVICE
+OP09N5 SOCB @ST7,R10          END OF FILE
+OP09RM MOVB R10,@PAB+8        Save current status into the PAB
+OP09RZ B    @>0000            RETURN TO THE CALLING PROGRAM
+
+; REMOVED OPCODES >A, >B, >C for testing purposes
+; OP0AN0
+;OP0BN0
+;OP0CN0
+; OP0AIN
+;OP0BIN
+;OP0CIN JMP  OP0CIN 	;just crash. who cares.
+;SV5  DATA 0
+
+*******************
+* ASSEMBLY  - >0A *
+*******************
+OP0AN0 LI   R11,NOERR         Load EXT. RETURN ADDRESS
+OP0AIN MOV  R11,@OP$ZZ+2      Save INT/EXT RETURN ADDRESS
+       MOVB @SPACE,@FLNAME    Just in case of 10 char name!
+       MOV  @PAB+2,@SAVST     Save execute address
+       CLR  @PAB+2            Make it now the real address
+OP0AN1 BL   @GETFIL           Get the start of the file
+       MOV  *R6+,R9           Store the FLAG in R9
+       JEQ  OP0AN2            If >0000 then file is ASSEMBLY
+       C    R9,@FFFF          If >FFFF then file is ASSEMBLY
+       JNE  ABCERR            If other then send ERROR msg.
+OP0AN2 MOV  @PAB+6,R0         Do we check the length?
+       JEQ  OP0AN3            If >0000 then we don't!
+       C    *R6,R0            Check if the length within range
+       JH   ABCERR            Nope, so send ERROR msg.
+OP0AN3 INCT R6                Yep, so point to the next word
+       MOV  *R6+,R8           Get the loading address
+       MOV  @SAVST,R0         Check if execute address loaded
+       JNE  OP0AN4            Yep, so don't load it
+       MOV  R8,@SAVST         Nope, so load the execute address
+OP0AN4 MOV  @PAB+2,R0         Check if real execute addr. loaded
+       JNE  OP0AN5            Yep, so don't load it
+       MOV  R8,@PAB+2         Nope, so load the real execute addr.
+OP0AN5 BL   @TRNFIL           Transfer the file to CPU RAM
+       MOVB *R6+,*R8+    ***  DATA for the above branch
+       ABS  R9                File done, check if any more
+       JEQ  OP0AN7            Nope, so exit the loader
+       LI   R1,FILNME         Yep, so point to the old filename
+OP0AN6 CB   *R1+,@SPACE       Is byte a ' '
+       JNE  OP0AN6            Nope, so look at the next byte
+       DECT R1                Yep, so point to the last char.
+       AB   @ST7,*R1          Add 1 to it, to make the new name
+       JMP  OP0AN1            Jump back up, and do it all again
+OP0AN7 C    @SAVST,@FFFF      Done, do we execute it?
+       JEQ  OP$RT             Nope, so skip executer
+       B    @EXIT             Yep, so EXECUTE THE FILE
+*
+* GET THE START OF A FILE
+*
+GETFIL MOV  R11,@GETFIN+2     SAVE RETURN ADDRESS
+       BL   @SEARCH           Look for the file
+       JMP  ABCERR            Not found, so send ERROR msg.
+       CLR  R3                Founded, so start at RELSEC0
+       BL   @ADDRF            Bring up the FDB sector
+       MOVB @12(R6),R0        Get the file type
+       COC  @ST7,R0           Check if PROGRAM type
+       JNE  ABCERR            Nope, so send ERROR msg.
+       MOV  @14(R6),R10       Get the total number of AU's
+       DEC  R10               Don't count the first sector
+       MOVB @16(R6),R5        Get the end of file offset
+       SRL  R5,8              Make the EOF offset a word
+       JNE  GETFIM            Jump if offset in use
+       LI   R5,256            Not used, so use max. instead
+GETFIM BL   @GETAU            Calc the real sector #
+       MOV  R4,R6             Check if any errors
+       JEQ  ABCERR            Yep, so send ERROR msg.
+       BL   @ADDR             Bring up RELSEC0 of the file
+GETFIN B    @>0000            RETURN TO LOADER
+*
+* TRANSFER A FILE TO RAM OR GRAM
+*
+TRNFIL MOV  *R11+,@TRNFIO
+       MOV  R11,@TRNFIP+2     SAVE RETURN ADDRESS
+       LI   R0,250            Max. length of the first sector
+       JMP  TRNFIN            Skip over the next sector length
+TRNFIM LI   R0,256            Max. length of the other sectors
+TRNFIN MOV  R10,R10           Check if at the last sector or end
+       JGT  TRNFIO            Jump, if more sectors to read
+       JLT  TRNFIP            Jump, if at the EOF
+       MOV  R5,R0             Last sector, so get the real length
+TRNFIO DATA >0000        ***  MOVB line sent after the BL @TRNFIL
+       DEC  R0                Check if finished
+       JNE  TRNFIO            Nope, so transfer some more
+       DEC  R10               Yep, so check if at the EOF
+       JLT  TRNFIP            Yep, so check for another file
+       INC  R3                Nope, so point to the next sector
+       BL   @ADDRF            Bring up the FDB sector
+       BL   @GETAU            Calc the real sector #
+       MOV  R4,R6             Check if any errors
+       JEQ  ABCERR            Yep, so send ERROR msg.
+       BL   @ADDR             Bring up the next file sector
+       JMP  TRNFIM            Jump back up, and transfer it!
+TRNFIP B    @>0000            RETURN TO LOADER
+*
+* RETURNS FROM OPCODES A,B,C
+*
+ABCERR C    @OP$ZZ+2,@OP0AN0+2        EXT. or INT. entry?
+       JNE  LDERR             Jump if INT. entry mode
+       B    @ERRT7            EXT. so send ERROR msg. back
+LDERR  INCT @OP$ZZ+2          INT. so point to the next opcode
+OP$RT  LDCR @LINK,0           Bring up the 2K DSR part
+OP$ZZ  B    @>0000            No execute, so exit back to the DSR
+
+;===================================
+
+
+*******************
+* X/BASIC   - >0B *
+*******************
+OP0BN0 LI   R11,NOERR         Load EXT. RETURN ADDRESS
+OP0BIN MOV  R11,@OP$ZZ+2      Save INT/EXT RETURN ADDRESS
+       BL   @SEARCH           Look for the file
+       JMP  ABCERR            Not found, so send ERROR msg.
+       CLR  R3                Founded, so start at RELSEC0
+       BL   @ADDRF            Bring up the FDB sector
+       MOVB @12(R6),R0        Save the FILE TYPE  in MSByte
+       MOVB @17(R6),@HIWS+1   Save the RECORD LEN in LSByte
+       BL   @GETAU            Calc the real sector #
+       MOV  R4,R6             Check if any errors
+       JEQ  ABCERR            Yep, so send ERROR msg.
+       BL   @ADDR             Bring up RELSEC0 of the file
+       COC  @ST0,R0           Check if VARIABLE type
+       JNE  OP0BN1            Nope, so check if PROGRAM
+       COC  @ST6,R0           Check if INTERNAL type
+       JNE  OP0BN1            Nope, so check if PROGRAM
+       INC  R0                Add 1 to RECORD LEN
+       CB   @HIWS+1,@FF00     Check if RECORD LEN equal to 254
+       JEQ  OP0BN2            Yep, then skip PROGRAM check
+OP0BN1 COC  @ST7,R0           Check if PROGRAM  type
+       JNE  ABCERR            Nope, so send ERROR msg.
+       MOV  *R6+,R4           Get bytes 0 and 1 of the file
+       MOV  *R6+,R5           Get bytes 2 and 3 of the file
+       MOV  *R6+,R8           Get bytes 4 and 5 of the file
+       XOR  R8,R5             Check if an XB PROGRAM file
+       JEQ  ABCERR            Exit to ERROR if not
+       ABS  R4                Calc new FLAG value
+       C    R4,R5             Check if an XB PROGRAM file
+       JNE  ABCERR            Exit to ERROR if not
+OP0BN2 LDCR @LINK,0           Bring up 2K part of DSR
+       LI   R1,>6370          Point to the XB entry point
+       BL   @GRM              Setup GRM read address
+       CB   @GRMRD,@SIX       Does >6370 equal a >06
+       JNE  ABCERR            Exit to ERROR if not
+       MOVB @GRMRD,R2         Does >6371 equal a >00
+       JNE  ABCERR            Exit to ERROR if not
+       LI   R8,>81A0          VDP command to turn off the screen
+       BL   @VRWA             Write to data to VDP REG 1
+       LI   R0,PAB+8          Point to the DSR PAB
+       LI   R1,INTPAB         Point to the INT PAB
+       LI   R2,20             Max. length of 20 bytes
+OP0BN3 MOV  *R0+,*R1+         Move a word of the fake PAB
+       DECT R2                Check if finished
+       JNE  OP0BN3            Nope, so move some more
+       LI   R1,INTLD          Point to the INT LOADER
+       MOV  *R1+,R0           Get location to RELOCIT
+       MOV  *R1+,R2           Get the length of the code
+OP0BN4 MOV  *R1+,*R0+         Move a word of the loader
+       DECT R2                Check if finished
+       JNE  OP0BN4            Nope, so move some more
+       MOV  @>8370,R1         Save VDP RAM size
+       LI   R0,>8300          Point to the top of CPU PAD
+       LI   R2,256            Max.  length of the CPU PAD
+OP0BN5 CLR  *R0+              Clear a word of the CPU PAD
+       DECT R2                Check if finished
+       JNE  OP0BN5            Nope, so clear some more
+       MOV  R1,@>8370         Restore VDP RAM size
+       LI   R1,>9E80          Reset the stacks to >839E & >8380
+       MOV  R1,@>8372         Reset the GPL stacks pointers
+       MOVB @HIWS+17,@>83D4   Tell OS what VDP REG 1 is set to
+       LI   R8,>0820          Point to the top of XB COMMAND AREA
+       BL   *R15              Setup VDP write address
+       LI   R2,360            Max.  length of the XB COMMAND AREA
+OP0BN6 CLR  *R14              Clear a byte of the XB COMMAND AREA
+       DEC  R2                Check if finished
+       JNE  OP0BN6            Nope, so clear some more
+       LWPI GPLWS             Load the GPL workspace
+       LI   R13,GRMRD         GROM READ DATA
+       LI   R14,>0108         GPL/OS SYSTEM FLAGS
+       LI   R15,VDPWA         VDP WRITE ADDRESS
+       LWPI HIWS              Load back our workspace
+       LI   R0,INLOC+>30      CPU location of our single-stepper
+       MOV  R0,@>83C4         Tell the OS to run our code too!
+       B    @INLOC            START EXECUTION OF THE XB MODULE
+
+*******************
+* CARTRIDGE - >0C *
+*******************
+OPCERR B    @ABCERR           Re-branch to ERROR code
+OP0CN0 LI   R11,NOERR         Load EXT. RETURN ADDRESS
+OP0CIN MOV  R11,@OP$ZZ+2      Save INT/EXT RETURN ADDRESS
+       CLR  @FLAG             Clear first file FLAG
+       MOVB @HEX1E,@PGRM      Assume no module RAM!
+       MOV  R12,@SV5          Save CRU address of this card
+       MOVB @SPACE,@FLNAME-1  Make sure no more then 9 chars!
+       MOVB @SPACE,@FLNAME    Just in case of 10 char name
+OP0CN1 BL   @GETFIL           Get the start of the file
+       MOV  *R6+,R9           Store the FLAG in R9
+       JEQ  OPCASM            If >0000 then file is ASSEMBLY
+       C    R9,@FF00          Check if CPU RAM transfers?
+       JEQ  OPCASM            If >FF00 then file is ASSEMBLY
+       CB   R9,@FF00          Check if MODULE transfers?
+       JEQ  OPCGPL            If >FFxx then file is MODULE
+       CB   R9,@FF00+1        If >00xx then file is MODULE
+       JNE  OPCERR            If other then send ERROR msg.
+OPCGPL CB   @4(R6),@>4000     Check if valid header
+       JNE  OPCGPM            Nope, so don't check RAM FLAG
+       CB   @7(R6),@PGA5      Check if module has RAM
+       JNE  OPCGPM            Nope, so leave the system alone
+       MOVB @HEX0A,@PGRM      Yep, so make sure RAM is enable!
+OPCGPM MOV  @PGRAM,R12        Check if PGRAM in the system
+       JEQ  OPCNXT            Nope, so check for another file
+       LI   R0,>1200          Lower module space CRU bits
+       MOV  R9,R1             Yep, so save the FLAG in R1
+       ANDI R1,>00FF          Make sure within valid range!
+       CI   R1,4              Check if below GRAM >6000
+       JL   OPCNXT            Yep, so don't load the file
+       CI   R1,8              Check if above GRAM >E000
+       JH   OPCMOD            Yep, so skip GRAM loader
+       LDCR R0,8              Turn on the PGRAM edit mode
+       INCT R6                Point to the loading address
+       MOVB *R6+,@GRMWA       Set the MSByte of the address
+       MOVB *R6+,@GRMWA       Set the LSByte of the address
+       LI   R8,GRMWD          Address of the GRAM write port
+SV5    EQU  $+2               Point to the >0000 below
+       LI   R12,>0000         Restore the Horizon CRU address
+       BL   @TRNFIL           Transfer the file to GRAM
+       MOVB *R6+,*R8     ***  DATA for the above branch
+       JMP  OPCNXT            Done, check for another file
+OPCMOD CI   R1,9              Check if lower module space
+       JEQ  OPCLOW            Yep, so skip over CRU change
+       CI   R1,>A             Check if above module space
+       JH   OPCNXT            Yep, so don't load the file
+HEX0A  EQU  $+2               Point to the >0A below (RAM ENABLE)
+HEX1E  EQU  $+3               Point to the >1E below (ROM ENABLE)
+       LI   R0,>0A1E          Upper module space CRU bits
+OPCLOW LDCR R0,8              Turn on the PGRAM edit mode
+OPCASM INCT R6                Point to the loading address
+       MOV  *R6+,R8           Get the loading address
+       MOV  @SV5,R12          Restore the Horizon CRU address
+       BL   @TRNFIL           Transfer the file to CPU RAM
+       MOVB *R6+,*R8+    ***  DATA for the above branch
+OPCNXT MOV  @SV5,R12          Restore the Horizon CRU address
+       ANDI R9,>FF00          Make sure within valid range!
+       ABS  R9                File done, check if any more
+       JEQ  OPCEND            Nope, so exit the loader
+       LI   R1,FILNME         Yep, so point to the old filename
+OPCNXU CB   *R1+,@SPACE       Is this byte a ' '
+       JNE  OPCNXU            Nope, so look at the next byte
+       ABS  @FLAG             Yep, so check if first file
+       JNE  OPCNXV            Nope, skip over filename increase
+       MOVB @ZERO,@-1(R1)     Add a '0' to the filename
+       INC  R1                Point to after the filename
+OPCNXV DECT R1                Point back to the last char
+       AB   @ST7,*R1          Add 1 to it, to make the new name
+       INC  @FLAG             Add 1 to the file count
+       JMP  OP0CN1            Jump back up, and do it all again
+OPCEND MOV  @PGRAM,R12        Done, get PGRAM card address
+       JEQ  OPCENE            Jump over enabler if no card
+       LDCR @PGRM,8           Turn on the PGRAM card
+OPCENE MOV  @SV5,R12          Restore the Horizon CRU address
+       B    @OP$RT            EXIT FROM THE LOADER
+
+;////////////
+
+********************************************************************************
+*
+* SECTOR #1 ADJUST           IN: New filename in FILNME
+*                            IN: Number of files on disk in FILCNT
+*
+* FLAG=0 ROUTINE REMOVES FDB POINTER ON A FILE NAME MATCH
+*        AND ADJUSTS REMAINING POINTERS UP ONE POSITION
+* FLAG=1 ROUTINE INSERTS FDB POINTER IN PROPER POSITION
+*
+* ON A FILE RENAME BOTH PASSES ARE EXECUTED USING 'ADJUST'
+* TO EXECUTE ONLY THE INSERTION PASS USE 'ADJ1' WITH FLAG=1
+*
+ADJUST CLR  @FLAG             ENTRY FOR BOTH PASSES
+ADJ1   MOV  R11,@ADJDNE+2     ENTRY FOR INSERTION PASS
+ADJ2   CLR  R8                Init current offset into sector #1
+       CLR  R4                Init current file count
+
+ADJST1 BL   @ADDR1            Bring up the catalog sector #1
+       A    R8,R6             Add current sector #1 offset to address
+       MOV  *R6,R3            Get a pointer to a FDB sector
+       JNE  ADJST2            Pointer here, so skip over inserter
+       MOV  @FDBSEC,*R6       The END, so add pointer of new file
+       JMP  ADJDNE            RETURN TO THE CALLING PROGRAM
+
+ADJST2 INC  R4                Not out of files, Inc current file count
+       MOV  R3,R6             Get the FDB sector wanted
+       BL   @ADDR             Bring up the FDB we are pointing to
+       LI   R1,FILNME         Load R1 with starting address of buffer
+       LI   R2,10             Max. of 10 bytes to compar
+       ABS  @FLAG             Did we entry thru 'ADJUST'
+       JEQ  ADJST3            Yep, so look only for equals condition
+
+ADJ3   CB   *R1+,*R6+         Compar a byte of the filenames
+       JGT  ADJST5            HIGHER, goto next file in catalog
+       JLT  ADJST6            LOWER, adjust list and insert FDB pointer
+       DEC  R2                EQUAL, check if finished
+       JNE  ADJ3              Nope, so compar some more
+       JMP  ADJST5     ****** Yep, so goto next file in catalog! ******
+
+ADJST3 CB   *R1+,*R6+         Compar a byte of the filenames
+       JNE  ADJST5            Don't match, so goto next file in catalog
+       DEC  R2                Check if finished
+       JNE  ADJST3            Nope, so compar some more
+       SETO @FLAG             MATCH: set flag to 'ADJ1' pass
+       BL   @SETUP            Bring up sector #1 and calc moving addrs.
+       MOV  R2,R2             Any files to move?
+       JEQ  ADJST4            Nope, so leave it at ZERO
+       DEC  R2                Yep, so minus 1 from number to move
+ADJST4 MOV  @2(R6),*R6+       Move up one word of the catalog
+       DEC  R2                Check if finished
+       JOC  ADJST4            Nope, so move some more
+       CLR  *R6               Done, so clear last pointer
+       JMP  ADJ2              RESTART PROGRAM AT 'ADJ1' ENTRY POINT
+
+ADJST5 INCT R8                Point to the next file in the catalog
+       JMP  ADJST1            Jump back up and check it
+
+ADJST6 BL   @SETUP            Bring up sector #1 and calc moving addrs.
+       MOV  @FDBSEC,R4        Get new pointer to add to the catalog
+ADJST7 MOV  *R6,R3            Save old pointer
+       MOV  R4,*R6+           Write the new pointer
+       MOV  R3,R4             Old pointer now becomes new pointer
+       DEC  R2                Check if finished
+       JNE  ADJST7            Nope, so change some more
+       MOV  R4,*R6            Done, write the last pointer
+
+ADJDNE B    @>0000            RETURN TO THE CALLING PROGRAM
+
+SETUP  MOV  R11,R3            Save the return address
+       BL   @ADDR1            Bring up the catalog sector #1
+FILCNT EQU  $+2               Point to the >0000 below
+       LI   R2,>0000          Get current number of files
+       S    R4,R2             Calc number of files to move
+       A    R8,R6             Calc starting address location of move
+       B    *R3               RETURN TO THE ADJUST PROGRAM
+
+********************************************************
+* UPDATE BIT MAP              IN: R0=Sector # OUT: R6=Addr. R7=Bit mask
+*
+UPDATE LI   R6,>5838          Start of the BITMAP in the 2K RAM block
+       MOV  @OFSET,R7         Get CRU value of the first drive page
+       CB   @MASK+1,@LINK+1   Check if 16 bit CRU bus
+       JNE  UPDATF            Yep, so skip over the SWAP BYTES
+       SWPB R7                Nope, so put the CRU value in the MSByte
+UPDATF LDCR R7,0              Bring up the first page of this diskette
+       MOV  R0,R7             Put sector number to check in R7
+       SRL  R7,3              Divide sector number by 8 (per byte)
+
+*****Begin Quad Density check
+       C    @FORSEC,@D1600    2.19.2012- drive size>1600?
+       JLE  UPTAT1            no, skip
+       SRL  R7,1              yes, divide sector # by 2 for quad dens. 2sec/AU
+       SRL  R0,1              also divide sector # to fix returned mask!
+*****end quad
+
+UPTAT1 A    R7,R6             Calc starting address of the byte wanted
+       LI   R7,>0080          Load R7 with shift bit mask value
+       ANDI R0,>0007          Make sure sector number within range 0-7
+       INC  R0                Add 1 to the number of bits to shift left
+       SLA  R7,0              Shift R7 the number of bits needed
+       RT                     RETURN TO THE CALLING PROGRAM
+D1600  DATA 1600      2.19.2012--test for quad
+
+******************************************************************
+* ENABLE RACK FOR I/O         IN: R6=Sector #  OUT: R6=Address
+*
+; ADDRF requires us to set FDBSEC before calling [FDBSEC->R6]
+;
+ADDR1  LI   R6,>5900          Sector 1 address              SECTOR 1
+       CLR  R7                Sector 1 offset
+       JMP  ADDRX             Page in the sector
+FDBSEC EQU  $+2               Point to the >0000 below
+ADDRF  LI   R6,>0000          FDB sector number             FDB SECTOR
+ADDR   MOV  R6,R7             Save the sector number        ANY SECTOR
+       SRL  R7,3              Divide number by 8
+       SLA  R7,3              Times  number by 8
+       S    R7,R6             Sub page number from sector number
+       SLA  R6,8              R6 = 0 - 7 times length of 256
+       AI   R6,>5800          Plus address of the 2K page
+       SRL  R7,2              Divide page number by 4
+ADDRX  A    @OFSET,R7         Add page offset for this drive
+       CB   @MASK+1,@LINK+1   8 bit or 16 bit BUS
+       JNE  WRTCRU            Jump if 16 bit
+       SWPB R7                8 bit, so swap them
+WRTCRU LDCR R7,0              Write the page # to the card
+       RT                     RETURN TO THE CALLING PROGRAM
+
+********************************************************************
+* FILE SEARCH                 RETURN: R11=Not found    @2(R11)=Found
+*
+* 1-18-2020	Added MOV instruction to capture current file's allocation for
+*		testing purposes. See OUT routines for use.
+* 
+
+TTSEARCH DATA 0		      ; 1-18-20  hold file size for OUT (other uses?)
+
+SEARCH MOV  R11,R0            Save the return address
+       CLR  @TTSEARCH	      Set up for returning current file size via this search
+       LI   R8,>007E          Point to the middle of sector #1
+       LI   R2,64             Number of files left in each direction
+SRCH1  BL   @ADDR1            Bring up the catalog sector #1
+       A    R8,R6             R6 points to current file to check
+       MOV  *R6,R6            Get the FDB sector number of this file
+       JEQ  SRCH4             If ZERO, then jump since no file here!
+       MOV  R6,@FDBSEC        Got it, save it into the FDBSEC vector
+       BL   @ADDR             Bring up the FDB sector of this file
+; now we have FBD. We test the filename first
+       LI   R1,FILNME         Point to the filename in the buffer
+       LI   R4,10             Max. length of the filename
+       MOV  R6,R3             Save R6 for later use
+; (R6 comes from BL @ADDR == address of sector in 2k rack)
+SRCH2  CB   *R3+,*R1+         Compar a byte of the filenames
+       JNE  SRCH3             Don't match, so exit the comparer
+       DEC  R4                Matched, so check if finished
+       JNE  SRCH2             Nope, so compar some more
+
+       SRL  R8,1              Done, so calc file number in sector #1 (index)
+       INC  R8                Add 1 since file numbers start at ONE
+       MOV  R8,@PNTCNT        Save the file number into PNTCNT
+       SETO R8                Found the file, so set the flag to >FFFF
+       INCT R0                Found the file, so exit with @2(R11)
+;
+; 1-18-2020 	Now, get file size from FDB for use in OUT file check routine
+;		Value may be zero in two cases: 
+;			1. File not found 
+;			2. No file data stored i.e., FDB only
+;	
+       MOV  @14(R6),@TTSEARCH   R6 is address of sector; total AUs is in offset xx
+       
+       B    *R0               FOUND THE FILE, RETURN TO CALLING PROGRAM
+
+SRCH3  JH   SRCH4             Check if name is HIGHER, if so jump
+       A    R2,R8             LOWER, so split the right side
+       JMP  SRCH5             Jump over the higher part
+SRCH4  S    R2,R8             HIGHER, so split the left side
+SRCH5  MOV  R2,R2             Check if any files left
+       JEQ  SRCHBD            Nope, so exit to the NOT FOUND part
+       SRL  R2,2              Yep, so divide number of files left by 4
+       A    R2,R2             Times above answer by 2
+       JMP  SRCH1             Jump back up and check the next file
+SRCHBD B    *R0               FILE NOT FOUND, RETURN TO CALLING PROGRAM
+*
+* FILE COUNT
+*
+; 1-2-2020; no limiter. Possible reason a wrong disk # takes so long
+; to recover from. 
+; 1-3, nope. Has to do with programs using incorrect EQ status/8350 error code
+;      based on their misunderstanding of level 2 IO reporting
+; 1-12 We might still want to limit the count in the future. Added check in comments.
+;      
+;
+COUNT  MOV  R11,R0            Save the return address
+       BL   @ADDR1            Bring up the catalog sector #1
+       CLR  R11               Clear the count
+COUNT1 MOV  *R6,*R6+          Get pointer to this fike
+       JEQ  CNTDNE            If ZERO, then exit since no more files
+       INC  R11               Not ZERO, so count this file
+;       CI   R11,128		;1-12-2020, HALT at 127 files!
+;       JL   COUNT1		;if >127, fall through with max (127)
+       JMP  COUNT1            Jump back up and check next pointer
+CNTDNE MOV  R11,@FILCNT       Save the number of files on this diskette
+       B    *R0               RETURN TO THE CALLING PROGRAM
+*
+* INPT AND OUT2 PRE-SETUP
+*
+MOVC   CLR  @FAC+2            Make sure access code is ZERO
+MOVD   MOVB @DRIVE+1,@FAC+2   Drive # / Access code ZERO or NOT ZERO
+       MOVB @WINFO,@FAC+6     Offset in PAD for additional info block
+       CLR  @INFO+2           ????
+       RT                     RETURN TO THE CALLING PROGRAM
+*
+* WRITE DEFAULT RECORD LENGTH
+*
+WDEFLT MOVB @PAB+4,R1         Check if record length was sent in PAB
+       JNE  WDEFLV            Yep, so exit this program
+       MOVB @PAB+8,R2         Nope, so get status/type of this file
+       LI   R1,>5000          Load default record length of 80
+       COC  @ST0,R2           Does the file exist?
+       JEQ  WDEFLU            Nope, so use the default record length
+       MOVB @17(R6),R1        Yep, so get the real record length
+WDEFLU MOVB R1,@PAB+4         Done, store the record length in the PAB
+WDEFLV RT                     RETURN TO CALLING PROGRAM
+*
+* RADIX - CONVERT VALUE IN R2 TO RADIX 100 THEN STORE IT
+*
+RADIX  MOVB @PRO,*R8+         Store length of 8 bytes for a RADIX 100
+       LI   R3,FAC            Starting address of the temp buffer
+       MOV  R2,R2             Check if the number is ZERO
+       JEQ  RADIX1            Yep, so exit to the store part
+       MOVB @ST1,*R3+         Put >40 into first byte of the buffer
+       CLR  R1                Clear R1 for 32 bit divide below
+       LI   R0,100            Load  R0 with the divisor
+       DIV  R0,R1             Divide the number (R2) by 100
+       MOV  R1,R1             Check if a remainder
+       JEQ  RADIX0            Nope, so store only one byte
+       AB   @ST7,@-1(R3)      Yep, so add 1 to >40 in the first byte
+       SWPB R1                Put the remainder in the MSByte
+       MOVB R1,*R3+           Write it to the temp buffer
+RADIX0 SWPB R2                Put the divided number in the MSByte
+       MOVB R2,*R3+           Write it to the temp buffer
+RADIX1 LI   R0,FAC            Starting address of the temp buffer
+       LI   R2,8              Max. length of a RADIX 100 number
+       ABS  @FLAG             Check if negative numbers wanted
+       JEQ  RADIX2            Nope, so skip over the negative maker
+       NEG  *R0               Yep, so make it a negative number
+RADIX2 C    R0,R3             Check if finished
+       JEQ  RADIX3            Yep, so start clearing the rest
+       MOVB *R0+,*R8+         Store a byte of temp buffer into real
+       DEC  R2                Sub 1 from the counter
+       JMP  RADIX2            Jump back up and check if finished yet
+RADIX3 MOVB R2,*R8+           Clear a byte of the real buffer
+       DEC  R2                Check if finished
+       JNE  RADIX3            Nope, so clear some more
+       RT                     RETURN TO THE CALLING PROGRAM
+*
+* GET CURRENT LOGICAL RECORD OFFSET
+*
+FCB    EQU  $+2               Point to the >0000 below
+CLROFF LI   R8,>0000          Get address of current FCB for this file
+       MOV  *R8,R3            Put current logical record offset into R3
+       RT                     RETURN TO THE CALLING PROGRAM
+*
+* CALC POSITION OF THE FIXED RECORD TO BE TRANSFERED
+*
+FIXTRN MOV  R11,@FIXTRO+2     Save the return address
+       MOVB @PAB+4,R0         Get the record length
+       SRL  R0,8              Make it a word
+       BL   @ADDRF            Bring up the FDB sector for this file
+       MOVB @13(R6),R2        Get the number of records per sector
+       SRL  R2,8              Make it a word
+       CLR  R3                Clear R3 for 32 bit divide below
+       MOV  @PAB+6,R4         Put record number wanted into R4
+       DIV  R2,R3             R3= Relative sector number wanted
+       MPY  R0,R4             R5= Address offset into the sector wanted
+       BL   @GETAU            Calc the sector number we want
+       MOV  R4,R6             Check if any errors
+       JEQ  FIXERR            Yep, so branch to I/O ERROR program
+       BL   @ADDR             Nope, so bring up the sector we want
+       A    R5,R6             R6= Address of the record we want
+FIXTRO B    @>0000            RETURN TO THE CALLING PROGRAM
+FIXERR BL   @OP01IN           ERROR, so close the file
+       B    @ERRT7            RETURN TO THE I/O ERROR PROGRAM
+
+************************************************************************
+* ADDSEC -- ADD A SECTOR TO AN EXISTING FILE
+* 1.11.2020	Fixed old allocation problem with next cluster exceeding max AU
+*
+ADDSEC MOV  R11,@ADDRT+2      Save RETURN ADDRESS
+       BL   @ADDRF            Enable FDB
+       AI   R6,28             Point to start of data chain pointers
+       MOV  R6,R8             Save point to first cluster
+       BL   @CKCLST           Is this cluster empty
+       JEQ  ADLP              Yep, so add a new one!
+
+; if first cluster pointer we must FIRST add a new one via ADLP
+; if NOT first cluster, we point to next possible cluster.
+; 
+ADLP1  AI   R6,3              Nope, so find the end
+       BL   @CKCLST           Is this cluster empty
+       JNE  ADLP1             Nope, so find the end
+       AI   R6,-3             Point to the last cluster  [i.e., so we can add to it if possible]
+       MOV  R6,R10            Save pointer to the last cluster
+
+; MAKE UP A CLUSTER           IN: R6=Cluster addr.   OUT: R1=SS, R2=OF
+       BL   @MKCLST           RECONSTRUCT A CLUSTER
+
+; now R1 has starting sector and R2 has offset for the current cluster
+; so that we can now try to ADD to it by checking the bitmap
+; Which... if I understand correctly... means that once we increase R2, 
+; the sector number COULD exceed maximum. And if that happens, all bets are off.
+; UPDATE does NOT test for maximum sector ! ! ! ! !   (fixes below)
+
+       MOV  R2,R3             Save a copy of the TOTAL offset
+       AI   R6,-5             Point to Byte 2 of previous cluster
+       C    R6,R8             Is there a cluster before this one
+       JLE  ADN1              Nope, so don't calc previous offset
+       MOVB *R6+,R0           R0 = OF1,SS3:???,???
+       SRL  R0,8              R0 = ___,___:OF1,SS3
+       MOVB *R6+,R0           R0 = OF3,OF2:OF1,SS3
+       SRL  R0,4              R0 = ___,OF3:OF2,OF1 !
+       S    R0,R2             R2 = Offset for this cluster
+       DEC  R2                Correct offset for INC below
+ADN1   INC  R2                Add 1 if working on first cluster
+       MOV  R1,R8             Save Starting Sector for ADFND
+       A    R2,R1             Point to AU of cluster being added
+       MOV  R1,R0             Copy it for the UPDATE program
+       BL   @UPDATE           Calc position in the BIT MAP
+       MOVB *R6,R0            Get the BIT MAP byte
+       CZC  R7,R0             Is this sector free?
+       JEQ  ADFND             Yep, so add to this cluster
+
+*
+*-2.19.2012tt
+*   If >1600, test whether or not we are in the same cluster. No need
+*   to allocate a new cluster if we are using the 2nd of two (2 SEC/AU)
+       C    @FORSEC,@D1600    Larger than 1600 sectors?
+       JLE  ADTTNW            no, force new cluster
+       MOV  R1,R6             yes, so lets copy the sector number
+       MOV  R1,R0             again
+       DEC  R0                point to previous sector (absolute)
+       SRL  R0,1              divide previous sector by 2
+       SRL  R6,1              divide PROPOSED sector by 2
+       C    R0,R6             compare
+       JEQ  ADFND             if equal, same cluster! Continue as if we added
+*-
+ADTTNW AI   R10,3             Nope, so add a new cluster
+       JMP  ADDNEW            Add a new cluster
+
+ADLP   MOV  R6,R10            Point to the last cluster
+       SETO R3                Reset for building a new cluster!
+
+ADDNEW 
+       BL   @FNDSEC           Search for the first free sector
+       MOV  R1,R8             Save Starting Sector for ADFND
+       JNE  ADFND             If >0 then a free sector was found
+
+;1-11-2020
+;add new branch point for error
+
+ADDRR1 BL   @OP01IN           No free sectors, so close the file
+       B    @ERRT4            And send DISK FULL ERROR MSG.
+
+; DEBUG
+;ADFND  	MOV  r1,@dumb1
+;	BLWP @XMTEXT	let's print the sector this routine thinks it found
+;	DATA ADDXM1
+;	blwp @xmnum
+;	data dumb1,1
+; /end debug
+
+
+;-----------------------
+; 1-11-2020 FIXED
+; This test is needed to detect when the next sector # in the current cluster EXCEEDS the
+; maximum disk size.  When we are adding a new cluster (addnew) FNDSEC does this
+; for us.  Remember, clusters are contiguous groups of sectors.
+;
+ADFND   C  R1,@FORSEC	;1-11-2020  test next sector vs. max drive size
+        JHE ADDRR1 	;whoa now, you can't add a sector that is outa range!!!
+
+       MOV  R1,R0             Get sector # to mark used
+       BL   @UPDATE           Calc postion in the BIT MAP
+       SOCB R7,*R6            Mark this sector as used
+
+       BL   @ADDRF            Bring up the FDB to change
+       INC  R3                Add one to the new offset
+       BL   @BDCLST           Write the new cluster using R8 and R3
+       BL   @ADDRF            Bring up the new FDB
+       AI   R6,14             Point to the number of sectors used
+       INC  *R6               Add 1 to the number of sectors used
+ADDRT  B    @>0000            RETURN TO THE CALLING PROGRAM
+
+*----------------------------------------------------------------------
+* FIND FIRST FREE SECTOR      OUT: R1= Sector number (ZERO if none)
+*
+* 5.07.2017 Corrected allocation error. Routine did not stop at proper
+*           boundary due to improper ^2 test
+* 1.11.2020 Verified routine functions properly using RS232 debug
+*
+; USAGE:
+; used by OUT4 to allocate and FDB for a new file (output/save file)
+; used by ADDSEC to add sectors to a file (e.g., record io)
+; used by OPEN to create FDB for new file
+; 
+FNDSEC 
+       LI   R6,>5838          Point to the start of the BITMAP
+       MOV  @OFSET,R7         Page # of the first page
+       CB   @MASK+1,@LINK+1   8 bit or 16 bit BUS
+       JNE  FNDSED            Jump if 16 bit
+       SWPB R7                8 bit, so swap it
+FNDSED LDCR R7,0              Write the page # to the card
+
+; debug-can't xmit sector until RACK is mapped in!
+;	BLWP @XMTEXT  ; entered routine
+;	DATA FNDXM1
+;	BLWP @XMNUM	;display  FDR before changes
+;	DATA >5838,100		;(200 bytes =  100 words)
+
+       CLR  R1                Start searching at sector 0
+       JMP  NXWRD             Jump and get the first WORD
+NXCHK  DEC  R2                Finished with this WORD
+       JNE  NXSEC             Nope, so shift some more
+
+; Now, have we reached the end of the bitmap?  12-22-2019
+
+NXWRD  MOV  *R6+,R0           Get another WORD of the BITMAP (or 1st word)
+       SWPB R0                Put it in the right order
+       LI   R2,16             16 sectors per WORD
+NXSEC  SRL  R0,1              Shift 1 sector out
+       JNC  FDSEC             If no carry, then it's free
+
+; 1600 sector disk = >640 (base 0 so don't all last sector)
+
+       INC  R1                Not free, so check next sector
+
+       C    @FORSEC,@D1600    2 sec/AU?
+       JLE  NXTT1             no
+       INC  R1                yes, double sector count (fix bitmap alloc 5.7.2017)
+
+NXTT1  C    R1,@FORSEC        Are we at the end of the drive
+       JLT  NXCHK             Nope, so check next sector
+
+ALLERR CLR  R1                Yep, so send >0000 back
+
+FDSEC
+FDRT11  RT
+
+;/start debug of FDSEC
+;	MOV  R1,@PLOPA1
+;	BLWP @XMTEXT
+;	DATA SECXM1
+;
+;	BLWP @XMNUM	;display  FDR before changes
+;	DATA PLOPA1,1		;(200 bytes =  100 words)
+;	RT
+;PLOPA1  DATA 0	;temp for display
+;end debug
+
+
+*------------------------------------------------------------------------
+* GET RAMSEC# from RELSEC#    IN: R3=Relative No.  OUT: R4=Ramdisk No.
+*
+;
+; 1-19-2020	It seems GETAU and RMCLST could also go beyond the current FDR if all
+;		available clusters were in use. While this doesn't hurt file creation, 
+;		it may impact deletion.  In fact, it is possible that my fix to CLUSTR is
+;		masking an issue with RMCLST, possibly freeing more bits than it should. To test,
+;		consider filling a 3200 sector disk, generate two fractured files, and then create
+;		a fake set of clusters (perhaps from the 2nd file) and put into the sector following
+; 		the first file's FDR.  If the spill happens, we should see bitmap removals related 
+;		both files. 
+;		
+
+GETAU  AI   R6,28             Point to Cluster Block
+       MOV  R3,R4             Move R3 to R4 for A R1,R4
+FDCLST MOVB *R6+,R1           R1 = SS2,SS1:???,???
+       SRL  R1,8              R1 = ___,___:SS2,SS1
+       MOVB *R6+,R2           R2 = OF1,SS3:???,???
+       MOVB R2,R1             R1 = OF1,SS3:SS2,SS1
+       SLA  R1,4              R1 = SS3,SS2:SS1,___
+       SRL  R1,4              R1 = ___,SS3:SS2,SS1 !
+       SRL  R2,8              R2 = ___,___:OF1,SS3
+       MOVB *R6+,R2           R2 = OF3,OF2:OF1,SS3
+       SRL  R2,4              R2 = ___,OF3:OF2,OF1 !
+       C    R2,R3             Is OF less than RELSEC# wanted
+       JLT  NXCLST            Yep, so next cluster
+       A    R1,R4             Nope, so add SS# to RELSEC#
+; Cautiuon: this label/RT is used by multiple routines
+EXCLST RT                     RETURN WITH R4 equal to RAMSEC#
+
+NXCLST MOV  R1,R4             Check if out of clusters?
+       JEQ  EXCLST            Yep, so RETURN WITH R4 = >0000
+
+; 1-19-2020	Possible edge case here; do we need to test R6 for end of the FDR? Or
+; is this routine sufficient together with other code. Must trace further.
+
+       MOV  R3,R4             Nope, so reset R4 to RELSEC#
+       S    R2,R4             SUB Total Offset so far from R4
+       DEC  R4                Adjust R4
+       JMP  FDCLST            Jump back and check next cluster
+
+
+======================================================================
+* MAKE UP A CLUSTER           IN: R6=Cluster addr.   OUT: R1=SS, R2=OF
+* 1-19-2020 ok
+MKCLST MOVB *R6+,R1           R1 = SS2,SS1:???,???
+       SRL  R1,8              R1 = ___,___:SS2,SS1
+       MOVB *R6+,R2           R2 = OF1,SS3:???,???
+       MOVB R2,R1             R1 = OF1,SS3:SS2,SS1
+       SLA  R1,4              R1 = SS3,SS2:SS1,___
+       SRL  R1,4              R1 = ___,SS3:SS2,SS1 !
+       SRL  R2,8              R2 = ___,___:OF1,SS3
+       MOVB *R6+,R2           R2 = OF3,OF2:OF1,SS3
+       SRL  R2,4              R2 = ___,OF3:OF2,OF1 !
+       RT                     RETURN TO THE CALLING PROGRAM
+
+*=====================================================================
+* CHECK THIS CLUSTER          IN: R6=Address of the cluster to check
+* 1-19-2020 OK
+CKCLST MOVB *R6,R0            R0 = SS2,SS1:???,???
+       SRL  R0,8              R0 = ___,___:SS2,SS1
+       MOVB @1(R6),R0         R0 = OF1,SS3:SS2,SS1
+       MOV  R0,R0             Compar to R0 to 0
+       RT                     RETURN TO THE CALLING PROGRAM
+
+
+*====================================================================
+* REMOVE THE CLUSTERS         IN: R6=Starting address of a FDB sector
+* 1-19-2020 	Possible edge case here; review.
+*
+RMCLST AI   R6,14             Point to the size of the file
+       CLR  *R6+              File is now 0 sectors long!
+       INCT R6                Point to the number of records
+       CLR  *R6               File now has 0 records in it!
+       AI   R6,10             Point to the first FDB cluster
+*
+* EMPTY THE CLUSTERS          IN: R6=Starting address of a cluster
+*
+; 1-19-2020	Possible edge case w/MTCLST do we need to somehow test R6 for end of the FDR? Or
+; is this routine sufficient together with other code. Must trace further. See also GETAU.
+;
+MTCLST MOVB *R6,R0            R0 = SS2,SS1:???,???
+       SRL  R0,8              R0 = ___,___:SS2,SS1
+       MOVB @1(R6),R0         R0 = OF1,SS3:SS2,SS1
+       MOV  R0,R0             Check if at the end?
+       JEQ  EXCLST            Yep, so exit back to calling program (shared return)
+       MOVB @MASK+1,*R6+      Nope, so wipe out BYTE 1 of this cluster
+       MOVB @MASK+1,*R6+      And wipe out BYTE 2 of this cluster also
+       MOVB @MASK+1,*R6+      And wipe out BYTE 3 of this cluster also
+       JMP  MTCLST            Done, so check if any more clusters!
+
+
+;======================================================================
+*
+* UPDATE THE BITMAP USING THE FDB CLUSTERS   DATA PASSED: SZCB or SOCB
+* 1-18-2020, Fixed edge case for when all 76 clusters are used
+*
+CLUSTR MOV  *R11+,@CLLP2      Move the SZCB R7,*R6 or SOCB R7,*R6
+       MOV  R11,@CLLP3+2      Save the RETURN ADDRESS
+       LI   R8,28             Start at the first cluster
+CLLP   BL   @ADDRF            Bring up the FDB sector
+       A    R8,R6             Point to the next cluster
+
+; 1-18-2020;	if severely fractured file has exhausted all available
+;		clusters, this routine will continue into next sector! 
+;		Must limit the routine to the current FDR. 
+;		The test after MKCLST assumes there will be a final entry of 000000. 
+;		However, the specification allows for the last cluster to be used. 
+;		Therefore, we must test for the end of the FDR and never go beyond it!
+;
+     CI r8,256  ;are we now beyond the end of FDR?
+     JHE CLLP3  ;yes, end. 
+;
+; Below cluster map test is only OK if we are checking for the end of FDR first
+;
+       BL   @MKCLST           RECONSTRUCT A CLUSTER  
+       MOV  R1,R1             At end of cluster map? 
+       JEQ  CLLP3             Yep, so exit sub-program
+
+       CI   R8,28             Is this the first cluster
+       JEQ  CLLP0             Yep, then don't calc previous offset
+       AI   R6,-5             Point to Byte 2 of previous cluster
+       MOVB *R6+,R0           R0 = OF1,SS3:???,???
+       SRL  R0,8              R0 = ___,___:OF1,SS3
+       MOVB *R6+,R0           R0 = OF3,OF2:OF1,SS3
+       SRL  R0,4              R0 = ___,OF3:OF2,OF1 !
+       S    R0,R2             R2 = Offset for this cluster
+       DEC  R2                Correct offset for INC below
+CLLP0  INC  R2                Add 1 if working on first cluster
+CLLP1  MOV  R1,R0             Setup UPDATE with sector number
+       BL   @UPDATE           Calc position in the BIT MAP
+CLLP2  DATA >0000             Either mark this sector FREE or USED
+       INC  R1                Point to the next file sector
+       DEC  R2                Check if finished with a cluster
+       JNE  CLLP1             Nope, so change the next sector
+       AI   R8,3              Done, so point to next cluster
+       JMP  CLLP              Jump back and get next cluster
+CLLP3  B    @>0000            RETURN TO THE CALLING PROGRAM
+*
+* BUILD A CLUSTER             IN: R8=SS, R3=OF, R10=Addr. OUT: None
+* 1-19-2020 OK
+BDCLST SWPB R8                R8= SS2,SS1:___,SS3
+       MOVB R8,*R10+          B1= SS2,SS1 Byte 1 is loaded
+       SLA  R3,4              R3= OF3,OF2:OF1,___
+       A    R3,R8             R8= ???,???:OF1,SS3
+       SWPB R8                R8= OF1,SS3:???,???
+       MOVB R8,*R10+          B2= OF1,SS3 Byte 2 is loaded
+       MOVB R3,*R10+          B3= OF3,OF2 Byte 3 is loaded
+       RT                     RETURN TO THE CALLING PROGRAM
+*eof

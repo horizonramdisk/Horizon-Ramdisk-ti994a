@@ -1,0 +1,678 @@
+* ROS-S3
+*********************************************
+*                                           *
+*         RAMDISK OPERATING SYSTEM          *
+*                                           *
+* COPYRIGHT 1985, HORIZON COMPUTER, LIMITED *
+* COPYRIGHT 1988, BUD MILLS SERVICES        *
+* COPYRIGHT 1989, OASIS PENSIVE ABACUTORS   *
+*********************************************
+*                                           *
+* Updated 2012-2020, InsaneMultitasker (TT) *
+*                                           * 
+* Version 8.42c   14 March 2020             *
+*********************************************
+* Reconciled March 2, 2012 Tesch
+*
+* MODIFICATIONS FROM 8.14 to 8.14F:
+*      - Changes "I Gotcha" to "CONTRL FAIL"
+*      - BTRUN routine modified to match 8.14F
+*      - Version and Copyright modified to match 8.14F
+*      - Versions: ROSTICC or ROSMYRK (fix to ROSMYRC in new release)
+* REVISION 8.32:
+*      BTLOG2: version change to 8.32
+*      BTLOG3: version date change to MAR 2012
+*
+* 3/22/2014  : version date change to 3/22/2014
+*            : ROS name changed to "ROS832M" and "ROS832TC"
+*            : Note, we could retrieve some space by eliminating logo/excess
+* 5/2/2016  Version 8.34
+* 5/7/2017  Version 8.38.  See BTCOPY(190) and BTLOG1(540) for vertext
+* 12/9/2019 V8.40
+*           xdt compatible; removed DORG from FRESPC
+*           PADSPC now reserved to pad between 6k and 2k segment
+* 1-18-2020 CALL MENU fails with ubergrom cart/XB27. Works with uber/BASIC. Works standard XB.
+*		Reset 6000 rom and grom?  Problem is with XB27. No fixes required for this issue.
+*  
+* 1-19-2020 	Title screen code removed. Retroclouds suggested CFG option to turn on/off display
+* 1-19-2020	Can we move any chunks of code from 6k space to this 2k segment? 
+*		Clean up ROS version/date here and in CFG
+*		Is file size 8188 really needed? Where is this hard-coded? (in CFG)
+* 1.24.2020	Moved LNK code to this 2k segment. 
+*		Version display is very limited use case for when there is neither a cart
+*		nor a menu at powerup. Is it worth retaining? For now, we'll keep it.
+* 1.25.2020     Added BSS at end of 2k segment to force image size to 8192 bytes.
+*
+*
+; CHALLENGE:
+; ROS842c
+; 2-15-2020	MENU 7.39 expects character 1 to start at >5808. 
+;		Obviously, hardcoding is bad. Also, the character set from 0-30
+;		was part character, part table data. 
+;		patched MENU to start loading the characters at 0x5734. If
+;		the title screen display table/info is adjusted again, MENU
+;		will require another patch.
+; 		CFG font loader is similarly impacted and will corrupt ROS at present.
+;
+;  FIX:		1. In MENU 7.39, replace  0201 5808 [li r1,5808]  with  c060 5804  [mov @5804,r1] 
+;  		2. pointer now set
+;
+;
+; 3.14.2020 	PI Day.  Updated release to 3.14.2020. 
+;
+;
+**************************
+* Links to misc. 2K code *
+**************************
+CALOAD LDCR @LINK,0           Bring up the 2K DSR part
+       B    @CALDZ            Link to the CALL LD.(x.)name loader
+LDPGM  LDCR @LINK,0           Bring up the 2K DSR part
+       B    @LDPGMZ           Link to the CALL (name) loader
+DSRUSR MOV  @SRHADR,R0        Get address of link header
+INTUSR MOV  R0,R1             Get address of link header
+       MOV  @14(R1),R1        Get address of user code
+PWRUSR LDCR @DSR8ON,0         Bring up the 2K DSR (RAMBO) part
+       B    *R1               Branch to the user code
+
+PADSPC BSS >57EE-$	;pad space versus using AORG to create 2nd segment  12.8.2019
+
+********************************************************************************
+FRESPC EQU  $                           CALC FREE SPACE OF 6K PART <--+
+;;       AORG >57EE                       DATA FOR RAMBO ROS LINK
+BOCALL DATA >0000               >57EE   THE END OF ALL DSR'S!!!!!!!   |
+       DATA BO$LNK              >57F0   ADDRESS OF THIS CALL          |
+       DATA >01B0               >57F2   RAMBO CALL >B0 (DATA)         |
+DSR8ON DATA >8001               >57F4   CRU VALUE FOR RAMBO ON        |
+BO$OUT LDCR @LINK,0             >57F6   RETURN TO HORIZON MODE        |
+       RT                       >57FA   EXIT TO CALLING PROGRAM       |
+BO$LNK LDCR @DSR8ON,0           >57FC   TURN ON RAMBO MODE            |
+       JMP  BO$OUT              >5800   OOPS! NO RAMBO INSTALLED      |
+SFREE1 EQU  BOCALL-FRESPC               CALC FREE SPACE OF 6K PART <--+
+
+
+; DO NOT move the following code. Must stay at this address!
+;
+; AUTOON/OFF - clears or sets PWRUP to this address. 
+AUTO   DATA PWRNXT              ;>5802   Address of Auto-Start PWRUP
+FONT01 DATA CHARS-232		;>5804   2-16-2020, pointer for MENU inverted chars
+FONT30 DATA CHARS		;>5806   2-16-2020, pointer for CFG font loader
+;
+
+; 1-24, possibly combine with end of BTABLE?
+VDPCLR BYTE 0		;used to clear vdp
+       BYTE 0 	;even
+
+; display table
+; If we remove the last remnants of the title screen, there are a few things
+; to adjust in CFG
+;
+BTABLE DATA >038C,BTCOLR                Color at VDP >038C
+       DATA >00b6,BTLOG1+3                LOG#1 at VDP >00C8  ros842
+       DATA >00f6,BTLOG3+3                LOG#3 at VDP >0108  1-18-2020
+        DATA 0                           End of VDP Table
+
+;; 	mov @>5804,r1   [c060 5804]  MENu 7.39 fix; replace 0201 5808
+
+BTCOLR DATA >0603,>010B,>0C0D,>0F07     COLOR TABLE + >00 on next line!
+CHARS  DATA >0070,>7070,>7070,>7070     #30  (CURSOR character)
+       DATA >FFFF,>FFFF,>FFFF,>FFFF     #31  (EDGE   character)
+       DATA >0000,>0000,>0000,>0000     #32  (SPACE  character)
+       DATA >1010,>1010,>1000,>1000     #33  !
+       DATA >2828,>2800,>0000,>0000     #34  "
+       DATA >2828,>7C28,>7C28,>2800     #35  #
+       DATA >103C,>5038,>1478,>1000     #36  $
+       DATA >6464,>0810,>204E,>4E00     #37  %
+       DATA >0020,>5020,>5448,>3400     #38  &
+       DATA >0004,>0810,>0000,>0000     #39  '
+       DATA >0810,>2020,>2010,>0800     #40  (
+       DATA >1008,>0404,>0408,>1000     #41  )
+       DATA >0010,>5438,>5410,>0000     #42  *
+       DATA >0010,>107C,>1010,>0000     #43  +
+       DATA >0000,>0000,>0010,>1020     #44  ,
+       DATA >0000,>007C,>0000,>0000     #45  -
+       DATA >0000,>0000,>0010,>1000     #46  .
+       DATA >0404,>0810,>2040,>4000     #47  /
+       DATA >0038,>4C54,>6444,>3800     #48  0
+       DATA >0010,>3010,>1010,>3800     #49  1
+       DATA >0038,>440C,>3040,>7C00     #50  2
+       DATA >0038,>0418,>0444,>3800     #51  3
+       DATA >0018,>2848,>7C08,>0800     #52  4
+       DATA >007C,>4078,>0444,>3800     #53  5
+       DATA >001C,>2078,>4444,>3800     #54  6
+       DATA >007C,>4408,>1020,>2000     #55  7
+       DATA >0038,>4438,>4444,>3800     #56  8
+       DATA >0038,>4444,>3808,>7000     #57  9
+       DATA >0000,>1000,>0010,>0000     #58  :
+       DATA >0000,>1000,>1010,>2000     #59  ;
+       DATA >0810,>2040,>2010,>0800     #60  <
+       DATA >0000,>7C00,>7C00,>0000     #61  =
+       DATA >2010,>0804,>0810,>2000     #62  >
+       DATA >3844,>0408,>1000,>1000     #63  ?
+       DATA >0038,>4454,>5C40,>3C00     #64  @
+       DATA >0038,>447C,>4444,>4400     #65  A
+       DATA >0078,>4478,>4444,>7800     #66  B
+       DATA >0038,>4440,>4044,>3800     #67  C
+       DATA >0070,>4844,>4448,>7000     #68  D
+       DATA >007C,>4078,>4040,>7C00     #69  E
+       DATA >007C,>4078,>4040,>4000     #70  F
+       DATA >0038,>4440,>4C44,>3C00     #71  G
+       DATA >0044,>447C,>4444,>4400     #72  H
+       DATA >0038,>1010,>1010,>3800     #73  I
+       DATA >001C,>0808,>0848,>3000     #74  J
+       DATA >0048,>5060,>5048,>4400     #75  K
+       DATA >0040,>4040,>4040,>7C00     #76  L
+       DATA >0044,>6C54,>5444,>4400     #77  M
+       DATA >0044,>6464,>544C,>4400     #78  N
+       DATA >0038,>4444,>4444,>3800     #79  O
+       DATA >0078,>4444,>7840,>4000     #80  P
+       DATA >0038,>4444,>5448,>3400     #81  Q
+       DATA >0078,>4444,>7848,>4400     #82  R
+       DATA >003C,>4038,>0404,>7800     #83  S
+       DATA >007C,>1010,>1010,>1000     #84  T
+       DATA >0044,>4444,>4444,>3800     #85  U
+       DATA >0044,>4428,>2810,>1000     #86  V
+       DATA >0044,>4454,>5454,>2800     #87  W
+       DATA >0044,>2810,>2844,>4400     #88  X
+       DATA >0044,>2810,>1010,>1000     #89  Y
+       DATA >007C,>0408,>1020,>7C00     #90  Z
+       DATA >3820,>2020,>2020,>3800     #91  [
+       DATA >4040,>2010,>0804,>0400     #92  \
+       DATA >3808,>0808,>0808,>3800     #93  ]
+       DATA >1028,>4410,>1010,>1000     #94  ^
+       DATA >0000,>0000,>0000,>7C00     #95  _
+       DATA >0020,>1008,>0000,>0000     #96  `
+       DATA >0000,>3008,>3848,>3400     #97  a
+       DATA >0040,>4078,>4444,>7800     #98  b
+       DATA >0000,>3844,>4044,>3800     #99  c
+       DATA >0004,>043C,>4444,>3800     #100 d
+       DATA >0000,>3844,>7C40,>3C00     #101 e
+       DATA >0008,>1010,>3810,>1000     #102 f
+       DATA >0000,>3844,>443C,>0438     #103 g
+       DATA >0040,>4058,>6444,>4400     #104 h
+       DATA >0010,>0030,>1010,>3800     #105 i
+       DATA >0008,>0018,>0808,>4830     #106 j
+       DATA >0040,>4050,>6050,>4800     #107 k
+       DATA >0010,>1010,>1010,>1800     #108 l
+       DATA >0000,>2854,>5454,>4400     #109 m
+       DATA >0000,>5864,>4444,>4400     #110 n
+       DATA >0000,>3844,>4444,>3800     #111 o
+       DATA >0000,>7844,>4478,>4040     #112 p
+       DATA >0000,>3844,>443C,>0404     #113 q
+       DATA >0000,>5864,>4040,>4000     #114 r
+       DATA >0000,>3840,>3804,>7800     #115 s
+       DATA >0010,>3810,>1010,>0800     #116 t
+       DATA >0000,>4848,>4848,>3400     #117 u
+       DATA >0000,>4444,>4428,>1000     #118 v
+       DATA >0000,>4454,>5454,>2800     #119 w
+       DATA >0000,>4428,>1028,>4400     #120 x
+       DATA >0000,>4444,>241C,>0438     #121 y
+       DATA >0000,>7C08,>1020,>7C00     #122 z
+       DATA >0810,>1020,>1010,>0800     #123 {
+       DATA >1010,>1000,>1010,>1000     #124 |
+       DATA >2010,>1008,>1010,>2000     #125 }
+       DATA >0000,>2054,>0800,>0000     #126 ~
+       DATA >0000,>0000,>0000,>0000     #127 (DEL    character)
+;---------------------------------------------------------------
+;
+	DATA 0,0,0,0	Extra padding for safety measure 1-24-2020
+
+;
+;1.24.2020	Moved this LNK from 6k to 2k space to free up
+;		some space in the 6k chunk.  MUST turn on the 2k
+; 		space prior to branching.  See LNK routine in ROS-S
+;		Workspace is loaded in LNK so we don't need it again here.
+;
+
+**************************
+* Link to AF,AO,DN,WO,WF *
+**************************
+;;; LNK    LWPI HIWS              Load our workspace
+
+LNK2K  MOV  @NAMLEN,@SAVLEN   Save the pointer
+       MOV  @SAVLEN,R8        Get pointer to '.'
+       BL   @VRWA             Setup VDP read address
+       CB   *R13,@DOT         Is there a '.' there
+       JNE  LNK3              Nope, so check pointer
+LNK1   MOVB *R13,R2           Yep, so get drive #
+LNK2   AI   R2,->3000         Convert ASCII # into a number
+       MOV  @SRHADR,R1        Get pointer to CALL table
+       MOV  @8(R1),R11        Get address of CALL program
+;;       JMP  WNUMB             Init the drive and run the program
+       B    @WNUMB	; out of range; must branch;;
+
+LNK3   MOVB @DNUMB1,R2        Use drive #1 if pointer is correct
+       MOVB *R13,R1           Skip over the CALL name
+       CB   *R13,@DOT         Is there a '.' now?
+       JNE  LNK2              Nope, so pointer is correct!
+       INCT @SAVLEN           Yep, so correct the pointer
+       JMP  LNK1              Jump back and get the real drive #!
+
+
+**************************
+* DN change drive number *
+**************************
+DROPEN LI   R8,TABLE          Start of top of table
+DROP1  CB   @5(R8),R0         Do drives # match
+       JEQ  DRERR             Yep, so send ERROR msg.
+       AI   R8,6              Nope, so point to next entry
+       CI   R8,PAB            Check if finished
+       JL   DROP1             Nope, so scan some more
+       RT                     Done, return to DN code
+
+DR1    MOV  @SAVLEN,R8        Get pointer to first '.'
+       INCT R8                Point to second DOT
+       BL   @VRWA             Setup VDP read address
+       CLR  R2                Clear R2 for compar's below
+       CB   *R13,@DOT         Check for a second DOT
+       JEQ  DR2               Yep, so get drive #
+       MOV  @SAVLEN,R8        Point to the first DOT
+       BL   @VRWA             Setup VDP read address
+       CB   *R13,@DOT         Check for a first DOT
+       JNE  DRERR             Nope, so send ERROR msg.
+DR2    MOVB *R13,R2           Get new drive number
+       MOV  R2,R3             Save string for later use
+       AI   R2,->3000         Make string a HEX byte
+       JEQ  DRERR             Is number under 1
+       JLT  DRERR             Yep, so must be an error
+       CI   R2,>2A00          Is number pass Z
+       JGT  DRERR             Yep, so must be an error
+       CI   R2,>1000          Is number within A-Z
+       JGT  DROK              New number within A-Z!
+       CI   R2,>0900          Is number not within 1-9
+       JGT  DRERR             Yep, so must be an error
+DROK   MOVB @DRIVE+1,R0       Get old drive #
+       BL   @DROPEN           Check if any opened files
+       MOV  R2,R0             Nope, then get new drive #
+       BL   @DROPEN           Check if any opened files
+       SWPB R2                Nope, then change the drive #
+       MOVB R3,R2             MSByte = ASCII # / LSByte = Num.
+       DEC  R1                Correct pointer to DSKx. place
+       MOV  R2,*R1            Change the drive #
+CALLRT CLR  R0                Make GPL think its at EOC
+CALLER MOVB R0,@>8342         Send exit status to GPL
+CALERR B    @GPRTN            Return to the GPL monitor
+DRERR  LI   R0,>0700          Error, send ERROR msg.
+       JMP  CALLER            Return to the GPL monitor
+
+***********************
+* W protection On/oFf *
+***********************
+WRPON  NEG  @OFSTBL(R2)       Yes, so set protection ON
+       JMP  CALLRT            Return to the GPL monitor
+WRPOFF ABS  @OFSTBL(R2)       No, so set protection OFF
+       JMP  CALLRT            Return to the GPL monitor
+
+***********************
+* A auto start On/oFf *
+***********************
+AUTOON MOV  @AUTO,@PWRUP      Turn Auto start On
+       JMP  CALLRT            Return to the GPL monitor
+AUTOFF CLR  @PWRUP            Turn Auto start oFf
+       JMP  CALLRT            Return to the GPL monitor
+
+*********************
+* Loader for CALL's *
+*********************
+CALDZ  LWPI HIWS              Load our workspace
+       BL   @GPAB             Get the DSR PAB from VDP
+       DATA 2                 Offset in from length of FIVE
+       MOVB @MASK+1,@PAB+8    Make sure length is a word!
+       CB   @PAB+14,@DOT      Make sure LD.x. syntax
+       JNE  CALERR            Nope, so send ERROR msg.
+       MOVB @PAB+13,R2        Yep, so get drive #
+       AI   R2,->3000         Convert ASCII # into number
+       JMP  CALD3             Jump to the loader!
+
+; CALL MENU(and other calls) enter here.
+; Entry for DELETE "<call>" (device table connects to CALL table)
+;
+; Deleting/CALLing program on ramdisk 1 that doesn't exist results in error when first call. Weird.
+;
+
+LDPGMZ LWPI HIWS              Load our workspace
+       LI   R3,10             Max. length of DSKx.12345
+       MOV  R3,@PAB+8         Save it into the fake PAB
+       MOV  @SRHADR,R2        Get address of this CALL
+       SRL  R3,1              Max. length of 12345
+       A    R3,R2             Point to the CALL NAME
+       LI   R1,PAB+15         Position of name in the fake PAB
+LDPGM0 MOVB *R2+,*R1+         Write a byte of the name
+       DEC  R3                Check if finished
+       JNE  LDPGM0            Nope, so write some more
+
+       MOVB @DNUMB1+1,R2      All CALLS are on drive #1
+CALD3  BL   @WNUMB            INIT THE DRIVE
+       AI   R1,-4             Point to the 'D' in DSKx.
+       LI   R0,PAB+10         Point to it in the fake PAB
+       MOVB *R1+,*R0+    10   Write 'D' to the fake PAB
+       MOVB *R1+,*R0+    11   Write 'S' to the fake PAB
+       MOVB *R1+,*R0+    12   Write 'K' to the fake PAB
+       MOVB *R1+,*R0+    13   Write the # of the drive
+       MOVB @DOT,*R0+    14   Write '.' to the fake PAB
+       BL   @PADLP            Pad the name and write it!
+       SETO @PAB+2            Set don't execute FLAG
+       CLR  @PAB+6            Set don't care about length FLAG
+       BL   @OP0AIN           Is it ASSEMBLY?
+       JMP  LDPGM2            Yep, so execute the program!
+;2-22
+; for CALL MENU >1200 vs >1400 error, is it in this section?  
+; In theory, OPOAIN should RET+2, hopping to below GROM code.
+; something goes terribly wrong.  
+; so where are we stumbling... 
+; seems to only do weird things with first call. That's even stranger.
+; turning off >1400 results in same thing  - 1200 ON with error
+; let's reload ROS..
+;
+       MOVB @GRMRA,@SAVE9     Save MSByte of GROM address
+       MOVB @GRMRA,@SAVE9+1   Save LSByte of GROM address
+       DEC  @SAVE9            Correct address to last byte
+       BL   @OP0BIN           Is it BASIC?
+       JMP  LDPGM1            Hmm, this should never happen!
+       BL   @OP0CIN           Is it CARTRIDGE?
+       JMP  LDPGM1            Do nothing when a CARTRIDGE!
+SAVE9  EQU  $+2               Point to the >0000 below
+       LI   R1,>0000          Get old GROM address
+       BL   @GRM              Restore the GROM address back
+       B    @NOTFND           Exit if ERROR
+LDPGM1 MOV  @SAVE9,R1         Get old GROM address
+       BL   @GRM              Restore the GROM address back
+       JMP  CALERR            Exit if CARTRIDGE
+
+; assembly!
+; Confirmed that CFG loads the CHARA1 file 
+; and moves 97*8 characters. So last char not moved.
+
+LDPGM2 MOV  @PAB+2,@SAVST     Assembly! Get execute address!
+       LI   R0,784            * 98 CHARS WITH 8 BYTES EACH *
+       LI   R8,>08F0          * START AT CHAR POSITION #30 *
+       LI   R1,CHARS          * ADDRESS OF CHARS TABLE     *
+       BL   *R15              Setup VDP write address
+LDPGM3 MOVB *R1+,*R14         Write a byte of the chars
+       DEC  R0                Check if finished
+       JNE  LDPGM3            Nope, so write some more
+       LI   R8,>0380          Point to the color table
+       BL   *R15              Setup VDP write address
+       LI   R2,16             Length of the color table
+LDPGM4 MOVB @COLOR+1,*R14     Write a byte of the colors
+       DEC  R2                Check if finished
+       JNE  LDPGM4            Nope, so write some more
+       B    @LDREGS           Load VDP REGS and EXECUTE PROGRAM
+
+**********************
+* >A3A0 PGRAM LOOKER *
+**********************
+PGLOC  EQU  >A3A0             WHERE TO MOVE THE CODE
+PGLOOK DATA PGLOC,PGEND-PGSRH  ;DATA FOR THIS RELOCODE
+PGSRH  MOV  R12,R1            Save the CRU address of it
+       LI   R12,>1000         Start search at the first card
+NXTDSR SBO  0                 Turn on the next card
+       CB   @>4000,@PGAA      Is there a DSR here
+       JNE  ENDFND            Nope, so try the next card
+       LI   R2,>400A          Yep, so point to the CALLS
+NXTLNK LI   R3,PGZAP          Load R3 with compar address
+       MOV  *R2,R2            Is there another call here
+       JEQ  ENDFND            Nope, so try the next card
+       MOV  R2,R0             Yep, so save R2 for NXTLNK
+       C    *R0+,*R0+         Point to the length byte
+       C    *R3+,*R0+         Does it compar to >02,'P'
+       JNE  NXTLNK            Nope, so check next call
+       CB   *R3+,*R0+         Does it compar to 'G'
+       JNE  NXTLNK            Nope, so check next call
+       SBZ  0                 Yep, so turn off the PGRAM card
+       MOV  R12,R0            Save the CRU address of it
+NOPGRM MOV  R1,R12            Restore CRU address of the Horizon
+       SBO  0                 Turn back on the Horizon card
+       MOV  R0,@PGRAM         Save the CRU address of the PGRAM
+       B    @RTLOOK           RETURN TO THE HORIZON INIT POWER-UP!!!
+ENDFND SBZ  0                 Done with the card, so turn it off
+       AI   R12,>0100         Point to the next card
+       CI   R12,>2000         Check if at end of CRU space
+       JNE  NXTDSR            Nope, so try the next card
+       CLR  R0                Yep, so make the address >0000
+       JMP  NOPGRM            Tell the Horizon NO PGRAM found
+PGZAP  EQU  $+PGLOC-PGSRH     Calc offset when code at WHERE
+       BYTE 2,'P','G'         Name of the CALL PG command
+PGAA   EQU  $+PGLOC-PGSRH     Calc offset when code at WHERE
+       BYTE >AA               Valid DSR header byte for LOOKER
+PGEND  EQU  $                 Calc length of above code
+
+***********************
+* >A340 XB INT LOADER *
+***********************
+INLOC  EQU  >A340             WHERE TO MOVE THE CODE
+INTLD  DATA INLOC,INTED-INTCD  ;DATA FOR THIS RELOCODE
+INTCD  SBZ  0         00-01   R00    (not used)
+       LWPI GPLWS     02-05   R01/02 (not used) / (not used)
+       B    @>006A    06-09   R03/04 (not used) / (not used)
+       DATA >2908     0A-0B   R05    Points to the 'D' in VDP PAB
+       DATA >2048     0C-0D   R06    Points to the LEN in VDP PAB
+       DATA INLOC+>1D  ;0E-0F   R07    Points to the LEN in CPU PAB
+       DATA >6495     10-11   R08    Address after the XB PAB MOV
+       DATA >83C4     12-13   R09    Address of User Int Vector
+       DATA VDPRD     14-15   R10    VDP read  data address
+       DATA VDPWD     16-17   R11    VDP write data address
+       DATA VDPWA     18-19   R12    VDP write address
+       DATA GRMWA     1A-1B   R13    GRM write address
+INTPAB BSS  20        1C-2F   R14/15 PAB length / PAB 'D' check
+MYINT  LWPI INLOC     30-33   Load the our interrupt workspace
+       MOVB R5,*R12   34-35   Setup LSByte of VDP address >0820
+       SWPB R5        36-37   Swap bytes to get >08 in the MSByte
+       MOVB R5,*R12   38-39   Write the MSByte of the VDP address
+       SWPB R5        3A-3B   Restore R5 back to >2908
+       CB   *R10,R15  3C-3D   Check if XB has written 'DSK1.LOAD'
+       JNE  MYINT1    3E-3F   Nope, so try again next 1/60 second
+       MOVB R6,*R12   40-41   Yep!, so setup VDP address to >0820
+       SWPB R6        42-43   Swap bytes to get >48 in the MSByte
+       MOVB R6,*R12   44-45   Write the MSByte of the VDP address
+       SWPB R6        46-47   Restore R6 back to >2048
+MYINT0 MOVB *R7+,*R11 ; 48-49   Write a byte of the new PAB
+       DEC  R14       4A-4B   Check if finished
+       JOC  MYINT0    4C-4D   Nope, so write some more
+       MOVB R8,*R13   4E-4F   Reset to just after the XB MOVE
+       SWPB R8        50-51   Swap bytes to get the LSByte
+       MOVB R8,*R13   52-53   Finish writing the GROM address
+       CLR  *R9       54-55   Done, tell OS to forget us now!!!
+MYINT1 LWPI GPLWS     56-59   Load back the GPL workspace
+       RT             5A-5B   RETURN TO THE CONSOLE O.S.
+INTED  EQU  $                 Use to calc size of above code
+
+********************
+* >A050 AUTO-START *
+********************
+BTLOC  EQU  >A050             WHERE TO MOVE THE CODE
+MENT   DATA BTLOC,BTSIZE      DATA FOR THIS RELOCODE
+BTPGM  MOV  R12,@SAVR12       Save CRU Addr. of this card
+       MOV  R11,@SAVR11       Save return address to B @>0000
+       CLR  @>8372            Turn off the CORCOMP MENU DISPLAY!
+       LI   R2,BTPNTR+2       Reset stack of MENU's
+       CLR  *R2+              Mark end of stack
+BOOT1  MOV  R12,*R2+          Put this MENU on the stack
+       MOV  R2,@BTPNTR        Save address of next stack entry
+BOOT2  SBZ  0                 Turn off current card
+       AI   R12,>0100         Inc to next card addr.
+       CI   R12,>2000         Check if all cards scaned
+       JEQ  BTRUN             Yep, so exit PWRUP scan
+       SBO  0                 Turn on a card
+       CB   @>4000,@BTHXAA    Check if valid DSR header
+       JNE  BOOT2             Nope, so goto next card
+       LI   R2,>4004          Yep, so get PWRUP header
+       JMP  BOOT4             Jump over, to get first link
+BOOT3  MOV  @SRHADR,R2        Restore DSR search pointer
+       SBO  0                 Turn card back on
+BOOT4  MOV  *R2,R2            Get next PWRUP header
+       JEQ  BOOT2             No more left, so next card
+       MOV  R2,@SRHADR        Save DSR search pointer
+       INCT R2                Point to PWRUP entry addr.
+       MOV  *R2+,R9           Get the entry addr.
+       MOV  @BTPNTR,R2        Get next stack entry
+       CI   R9,PWRGO          Check if this is a MENU
+       JNE  BOOT5             Nope, so execute it
+       C    @>4000,@BTHXAA    Check if version 8.12 MENU
+       JEQ  BOOT1             Yep, so put it on the stack
+BOOT5  BL   *R9               EXECUTE POWER-UP CODE
+       JMP  BOOT3             Return, and look for more PWRUP
+*---
+* ROS 8.14F modified BTRUN - 4 bytes less code + no BL @GRMSET at this time
+*---
+BTRUN  BL   @CPUMOV
+       DATA >8300,BTDATA
+       MOV  @CCON,@>8372
+       MOVB @GRMRA,@SAVADR
+       MOVB @GRMRA,@SAVADR+1
+       DEC  @SAVADR
+
+******* modified March 2, 2012 to reflect 8.14F above! **************
+* BTRUN  MOV  @CCON,@>8372      Turn on the CORCOMP MENU DISPLAY!
+*      BL   @CPUMOV           Save CPU PAB to high memory
+*      DATA >8300,BTDATA      DATA for the above BL @CPUMOV
+*      MOVB @GRMRA,R1         Get MSByte of GROM address
+*      MOVB @GRMRA,@GPLWS+3   Get LSByte of GROM address
+*      DEC  R1                Sub 1 to make true address
+*      MOV  R1,@SAVADR        Save the GROM address
+*      BL   @GRMSET           Restore the GROM address
+**********************************************************************
+BTNEXT SBZ  0                 Turn off current card
+       MOV  @BTPNTR,R2        Get next stack entry
+       DECT R2                Point to last stack entry
+       MOV  *R2,R12           Get CRU addr. of this MENU
+       JEQ  BTERR             If at end of stack, then EXIT
+BTGO   MOV  R2,@BTPNTR        Save current stack pointer
+       MOVB @SCROFF,*R15      Write LSByte of SCREEN OFF cmd
+       MOVB @SCROFF,*R15      Write MSByte of SCREEN OFF cmd
+       SBO  0                 Turn on HORIZON card
+       MOV  @>400A,R1         Get addr. of CALL's
+       MOV  R1,@SRHADR        Set DSR search pointer for MENU
+       INCT R1                Point to first entry addr.
+       MOV  *R1,R1            Get entry addr.
+       BL   *R1               EXECUTE CALL U1 (MENU)
+       JMP  BTNEXT            If no MENU, then next menu
+
+       SBZ  0                 Turn off current card
+       MOV  @BTPNTR,R2        Get next stack entry
+       DECT R2                Point to last stack entry
+       MOV  *R2,R12           Get CRU addr. of this MENU
+       JNE  BTGO              If not at end then execute it!
+
+SAVADR EQU  $+2+BTLOC-BTPGM   Address of >0000 part below
+BTEXIT LI   R1,>0000          Restore GROM address
+BTLOGO BL   @GRMSET           Setup GROM address
+       BL   @CPUMOV           Save CPU PAB to high memory
+
+       DATA BTDATA,>8300      DATA for the above BL @CPUMOV
+SAVR12 EQU  $+2+BTLOC-BTPGM   Address of >0000 part below
+       LI   R12,>0000         Reload CRU Addr. of this card
+       SBO  0                 Turn on HORIZON card
+       LDCR @LINK,0           Make sure first page is on!
+
+
+; last remnant of title screen display. Remove? Move CFG version to top of 2k?
+       LI   R3,BTABLE         Load R3 with VDP write table
+BTVDP1 MOV  *R3+,R8           Get a VDP write location
+       JEQ  BTVDP3            If ZERO then end of table
+       BL   @VWWA             Setup VDP write address
+       MOV  *R3+,R1           Get a CPU read location
+BTVDP2 MOVB *R1+,R2           Get a byte of data
+       JEQ  BTVDP1            If >00, then get next line
+       MOVB R2,@VDPWD         Write a byte of data to VDP
+       JMP  BTVDP2            Get next byte of data
+
+
+; Why are we clearing 1k VDP? Is this a fix for something else?
+BTVDP3 LI   R8,>0B00          Clear VDP starting at >0B00
+       BL   @VWWA             Setup VDP write address
+       LI   R2,1024           Clear  1K starting at >0B00
+BTVDP5 MOVB @VDPCLR,@VDPWD    Clear a byte of VDP RAM
+       DEC  R2                Check if finished clearing
+       JNE  BTVDP5            Nope, so clear another byte
+       SBZ  0                 Turn off this HORIZON card
+
+       LI   R9,ENDSRH         Address of >0000 to end search
+       MOV  R9,@SRHADR        Restore DSR search pointer
+       LI   R12,>1F00         Finished! So tell O.S. no more!
+SAVR11 EQU  $+2+BTLOC-BTPGM   Address of >0000 part below
+       B    @>0000            Return to calling DSRLNK program
+
+; there was no menu so now let's look for a module
+
+BTERR  LI   R1,>6000          Address of first module
+       BL   @GRMSET           Setup GROM address
+       CB   *R13,@BTHXAA      Check if valid module header
+       JNE  BTEXIT            No module, so exit (AND PREPARE TO DISPLAY LOGO/ROS VERSION)
+
+       LI   R1,>6006          Address of USER header
+       BL   @GRMSET           Setup GROM address
+       MOVB *R13,R2           Read MSByte of address
+       MOVB *R13,@GPLWS+5     Read LSByte of address
+       MOV  R2,R1             Check if any user programs
+       JEQ  BTEXIT            No user programs, so exit  (again, exit to display)
+
+       INCT R1                Point to first entry addr.
+       BL   @GRMSET           Setup GROM address
+       MOVB *R13,R1           Read MSByte of address
+       MOVB *R13,@GPLWS+3     Read LSByte of address
+       JMP  BTLOGO            Load the BOOT LOGO	(we never see it in this case. rom take over upon return?)
+
+
+GRMSET EQU  $+BTLOC-BTPGM     SETUP A GROM ADDRESS FROM R1
+GRM    MOVB R1,@GRMWA         Write the MSByte of the GROM address
+       SWPB R1                Put the LSByte in the MSByte
+       MOVB R1,@GRMWA         Write the LSByte of the GROM address
+       RT                     RETURN TO THE CALLING PROGRAM
+
+CPUMOV EQU  $+BTLOC-BTPGM     MOVE A SECTION OF CPU RAM
+       MOV  *R11+,R0          Get address of FROM:
+       MOV  *R11+,R1          Get address of TO:
+       LI   R2,112            Length of the move
+CPUMV1 MOV  *R0+,*R1+         Move a word of memory
+       DEC  R2                Check if finished
+       JNE  CPUMV1            Nope, so move some more
+       RT                     RETURN TO THE CALLING PROGRAM
+
+CCON   EQU  $+BTLOC-BTPGM     Flag to turn on the CORCOMP MENU DISPLAY!
+       DATA >FF7E             Value to put into >8372
+;
+; AA81 is the "dsrheader" 
+; CFG searches >5800->6000 for these two bytes to determine the ROS version loc
+;	Also accounts for the 3 graphics bytes. We could clean up the version info
+;	and simplify both ROS and CFG by eliminating the graphic info and by 
+;	saving only a version and date. 
+;
+BTHXAA EQU  $+BTLOC-BTPGM     Full word is used >AA81!
+       BYTE >AA               Valid DSR header
+SCROFF EQU  $+BTLOC-BTPGM     VDP SCREEN OFF command
+       BYTE >81               Valid DSR version
+
+; If we change this table, we introduce CFG/ROS display incompatibility.
+; So far, older CFG is still allowed to load the newer ROS. We may want to 
+; reconsider that strategy for future release. 
+;
+;
+BTLOG1 BYTE 1,2,3
+       TEXT '  ROS842c '
+       BYTE 11,12,13,0
+BTLOG2 BYTE 4,5,6
+       TEXT '   8.42c  '
+       BYTE 14,15,16,0
+BTLOG3 BYTE 7,8,9
+;      TEXT '02/16/2020'      v8.42
+       TEXT ' 3.14.2020  '	;3.14.2020
+       BYTE 17,18,19
+ENDSRH EQU  $+BTLOC-BTPGM     End of search marker
+       DATA 0
+*      DATA >0,>0        consider this to fix the TI/BwG load bug
+* as of ROS8.34, file size is 8188. CFG hardcoded for this len. Bug causes
+*      failure unless size is 8192 and FDR EOF byte is updated from >FC to >00
+* 1-18, Is CFG really hardcoded for 8188? I find evidence of hardcoded to >2000.  hmmmm
+* 
+; seems this is setting us up for the relocatable code >a000 area; buffer after, etc based
+; on the size.  Need to look at LIST more closely.
+BTSIZE EQU  $-BTPGM           Size of BTLOC program
+BTDATA EQU  BTSIZE+BTLOC      Location of the save CPU PAD
+BTPNTR EQU  BTSIZE+BTLOC+256  Stack of MENU's CRU addr.
+
+SFREE2 EQU  >6000-$           CALC FREE SPACE OF 2K PART
+       BSS  SFREE2-2	*and reserve last bytes to foce to 8192 bytes.  (TI controller issue?)
+       DATA >5FFE
+PLOPXX	EQU $
+;
+       END

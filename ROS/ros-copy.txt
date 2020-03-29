@@ -1,0 +1,22 @@
+* ROSS
+*********************************************
+*                                           *
+*         RAMDISK OPERATING SYSTEM          *
+*                                           *
+* COPYRIGHT 1985, HORIZON COMPUTER, LIMITED *
+* COPYRIGHT 1988, BUD MILLS SERVICES        *
+* COPYRIGHT 1989, OASIS PENSIVE ABACUTORS   *
+*********************************************
+*                                           *
+* Updated 2012-2020, InsaneMultitasker (TT) *
+*                                           * 
+* Version 8.42c   14 March 2020             *
+*********************************************
+
+       COPY "ROS-S.txt"
+       COPY "ROS-S1.txt"
+       COPY "ROS-S2.txt"
+;       COPY "RS232debug.txt"	;debug routines  38.4k xmit
+       COPY "ROS-S3.txt"
+       END
+ 
