@@ -1,0 +1,434 @@
+* CFG Version 8.42c   cfg-s3
+********************************************* R0-R8 temp
+*                                           * R9    ADDNUM
+*        RAMDISK CONFIGURE PROGRAM          * R10   LINK
+*                                           * R11   RT ADDR.
+* COPYRIGHT 1985, HORIZON COMPUTER, LIMITED * R12   CRUBAS
+* COPYRIGHT 1988, BUD MILLS SERVICES        * R13   TABLE
+* COPYRIGHT 1989, OASIS PENSIVE ABACUTORS   * R14   SAVRT
+*                                           * R15   RAMBO FLAG
+*        -- ALL RIGHTS RESERVED --          *
+*********************************************
+*                                           *
+* Updated 2012-2020, InsaneMultitasker (TT) *
+*                                           *
+*********************************************
+;
+; TO DO:
+; - review ROSLOC/Geneve RAMBO "ROMPAGE" code for possible removal
+;
+
+****************************
+* CFG DATA/BYTE/TEXT BLOCK *
+****************************
+* Screen locations for input.
+* They parallel the FCOL address's
+VLOC1  DATA >0141,>0191,>01E1 	;U1,U4,U7
+       DATA >0150,>01A0,>01F0 	;U2,U5,U8
+       DATA >015F,>01AF,>01FF 	;U3,U6,U9
+       DATA >0267,>02B7,>02CA 	;back,fore,max-sectors,power-up
+DNUMB  DATA 1
+DNAME  DATA 4
+WPO    DATA 18
+FORMA  DATA 26
+SIZE   DATA 34
+DECTEN DATA 10
+HEX30  DATA >0030
+SPACE  DATA >2000
+DSRHDR DATA >AA81             Header for ROS 8.1
+TAGTBL DATA LDIDT             TAG 0 Load PRG Identification
+       DATA BDLD,BDLD         1 & 2 NO ENTRY ADDRESS ALLOWED
+       DATA REXREF,AEXREF     3 & 4 Load External Reference
+       DATA REXDEF,AEXDEF     5 & 6 Load External Definition
+       DATA LOOP,LOOP         7 & 8 EOR! so get next RECORD
+       DATA ALADR,RLADR       9 & A Load the address counter
+       DATA ADATA,RDATA       B & C Load the next DATA word
+       DATA BDLD,BDLD         D & E NO UNDEFINED TAG ALLOWED
+       DATA LOOP              TAG F EOR! so get next RECORD
+REFDEF DATA >400E
+       TEXT 'DRIVE '
+       DATA >4010
+       TEXT 'FORSEC'
+       DATA >4012
+       TEXT 'WTPR  '
+       DATA >4018
+       TEXT 'OFSET '
+       DATA >401C
+       TEXT 'PGRAM '
+       DATA >401E
+       TEXT 'VDPCPU'
+       DATA >4040
+       TEXT 'TABLE '
+       DATA >40A0
+       TEXT 'PAB   '
+       DATA >40C4
+       TEXT 'OCODE '
+       DATA >40DE
+       TEXT 'SAVLEN'
+       DATA >40E0
+       TEXT 'ROSWS '
+       DATA >4100
+       TEXT 'BUFFER'
+DNTBL  DATA >0000
+       TEXT 'OFSTBL'
+NOUSER DATA BO$OUT
+       TEXT 'BO$OUT'
+       DATA BO$WS+20
+       TEXT 'MAXPAG'
+       DATA BO$PAG
+       TEXT 'BO$PAG'
+       DATA >402E
+       TEXT 'USRDSR'
+       DATA >403C
+       TEXT 'USRPWR'
+       DATA >403E
+       TEXT 'USRINT'
+NEWUL  DATA >0000,>00FC,>0000,>0000          New Underline Char
+ADRTBL DATA SFIRST,CONFIG,LD,SV,FONT,EDIT,SCFG,RORG
+OPTTBL TEXT 'QNLSFEDU'
+FORMTB DATA >0944,>534B,>2028,>0202,>0300    Data for formatter
+PDATA  DATA >0004,>1000,>5000,>0000,>0000    Filename for RORG
+RORGN  TEXT 'DSK1.USRDSR              '
+COLON  TEXT ':'                              Check for END OF RORG
+FNTPAB DATA >0500,>07FA,>0000,>0800,>0000    Filename for FONT
+FNTNAM TEXT 'DSK1.CHARA1              '
+DOT    TEXT '.'                              Check for DOT in name
+RUNPAB DATA >0500,>1000,>0000,>2000,>0000    Filename for LOAD
+FNAME  TEXT 'DSK1.ROS842              '       **8.14F: added TICC to ROS name
+D      TEXT 'D'                              Check if 'D' was pressed
+
+; SCRLN1 TEXT 'RAMBO/HORIZON CONFIG  v8.42c 23.Feb.2020'
+
+SCRLN1 TEXT 'RAMBO/HORIZON CONFIG  v8.42c   3.27.2020'
+       TEXT '(C)1990 OPA/BMS                     -TT '
+SCRLN2 TEXT 'CARD   PERIPHERAL    | TOTAL  RAM- RAMBO'  ;8.14f:' PROG'->'RAMBO'
+       TEXT 'ADDR. CARD DETECTED  | SIZE   DISK  RAM '
+       TEXT '----- -------------- - ----- ----- -----'
+CARDLN TEXT '>__00 ______________   ____K ____K ____K'
+DONELN TEXT 'Hit any key for CONFIG or FCTN = to QUIT'
+FCOL   TEXT ' Screen Color:     Total Sectors:       '
+       TEXT '   Text Color:        Powerup On?       '
+OPTNS  TEXT ' Quit Next Load Save Font Edit Drives   ' ; QNL SFED U
+EDMENU TEXT ' Edit your ROS, or press FCTN 9 to exit '
+SETUP  TEXT ' #  Disk Name    W/P    Format    Size  '
+BADCRC  TEXT ' Failed: ROS has wrong CRC. Press a key.'
+GOODCRC TEXT ' Success! ROS loaded/CRC OK. Press a key'
+NULLCRC TEXT ' OK; ROS loaded w/null CRC.  Press a key'
+
+ERR    TEXT ' Error, press any key to return to menu '
+SAVDSK TEXT ' Keep existing disk information (y/n)?  '
+SAVDSKCONFIRM
+       TEXT ' Not saving info!  C to confirm; F9=exit'
+DREDIT TEXT 'Input new drive number.  1 to 9 & A to Z'
+DNEDIT TEXT 'Input the new diskname for this ramdisk.'
+WPEDIT TEXT 'Write protect this ramdisk?  (Yes or No)'
+F1EDIT TEXT 'Format this ramdisk?         (Format/No)'
+F2EDIT TEXT 'Format or Delete this ramdisk? (F/D/No) '
+
+FWARN1 TEXT 'WARNING: Format/Delete will ERASE this  '
+FWARN2 TEXT 'drive AND all after it. Continue? (Y/N) '
+WCLEAR TEXT '                                        '
+
+
+SZEDIT TEXT 'Input new size in sectors.  Max.# = ____'
+NONELN TEXT 'NO RAMDISKS FOUND : Press '
+NOPTNS TEXT ': NO VALID ROS LOADED '
+
+; Each name is 16 bytes because in CRDSET, the address of the text
+; is calculated by shifting R1 4 bits left (x16). 
+; The DSRFND routine adjusts R1 when a name is found/not found. 
+;
+
+NAMES  TEXT 'UNDEFINABLE     '  ;0
+       TEXT ' 8K*8 HORIZON   '  ;1
+*      TEXT '32K*8 HORIZON   '  ;2
+*      TEXT '32Kor128K HRD   '  ;2  * Ros8.14F modification
+       TEXT '32k - 512k HRD  '  ;2            3.3.2012
+       TEXT 'Horizon/RAMBO   '  ;3
+
+       TEXT 'TIPI Device     ' ;4   5.07.2017
+       TEXT 'Classic99 DSR   ' ;5
+       TEXT 'SCSI Card       ' ;6  
+       TEXT 'IDE Card        ' ;7  
+       TEXT 'Myarc HFDC      ' ;8    Change to >25 subroutine
+       TEXT 'BwG Disk Cntr   ' ;9
+;       TEXT 'Floppy Cntrlr   ' ;10 
+
+       TEXT 'Floppy Cntrlr   '	;10 check for "LLR" CALL (Myarc or CC MG future)
+       TEXT 'Floppy Cntrlr   '  ;11 future check for DSK4 (ti only has 3)
+       TEXT 'Axiom Printer   ' ;12  
+       TEXT 'HDX1/RS232      ' ;13
+       TEXT 'RS232 and PIO   ' ;14  
+       TEXT 'PGRAM Card      ' ;15  
+       TEXT 'Clock Card      ' ;16  
+       TEXT 'Myarc Ramdisk   ' ;17  
+       TEXT 'Dijit AVPC      ' ;18
+       TEXT 'HSGPL           ' ;19
+       TEXT 'SPVMC Speech    ' ;20
+       TEXT 'EVPC Video      ' ;21
+       TEXT 'CC 512K Mem+    ' ;22
+       TEXT 'FoundationRAM   ' ;23
+       TEXT 'GRAM Card       ' ;24
+       TEXT 'GPIB IEEE-488   ' ;25
+       TEXT 'WDSPersonality  ' ;26  "WDS1"
+       TEXT 'TI Thermal Prt  ' ;27
+;
+; Equates are used to set R1 "manually" during detection of below cards
+; MBP could be added here, for example
+;
+CSAMS	EQU  28		
+CGENEVE EQU  29
+CGENROM EQU  30
+CUNK    EQU  31
+
+       TEXT 'AMS/SUPER AMS   ' ;28
+       TEXT 'Geneve DSR      ' ;29
+       TEXT 'Geneve ROMpage  ' ;30
+       TEXT 'UNKNOWN CARD    ' ;31
+; End of device text
+
+
+HEX    TEXT '0123456789ABCDEF'
+FONTLN TEXT 'Load FONT from:'
+LDPT   TEXT 'Load ROS  from:'
+USERLN TEXT 'Load USER DSR: '
+SVPT   TEXT 'Save ROS  to:  '
+AST    TEXT '*         '
+USRLN  TEXT 'User DSR:'
+INTLN  TEXT 'Interrupt'
+PWRLN  TEXT 'Power-Up'
+ROPTNS TEXT 'sk User '
+VERLN  TEXT 'Version:'
+HEADER TEXT 'Len/Name'
+ULINE  TEXT '--------'
+
+* Modified order 3.3.2012 to account for hard drive devices w/DSKx
+*                       New   Old
+TIPI1  BYTE 4            4     x
+       TEXT 'TIPI'	 ;4 TIPI, must preceed all controllers due to DSK1 entry
+
+CLASS9 BYTE 4            ;5   classic99 DSR
+       TEXT 'CLIP'
+SCSCRD BYTE 4            ;6
+       TEXT 'SCS1'
+IDECRD BYTE 4            ;7    
+       TEXT 'IDE1'
+
+WDSCRD BYTE 1		 ;8  HFDC - Use level 2 to distinguish w/Personality #25
+       BYTE >25
+
+BWG99  BYTE 5            ;9    BWG Floppy Controller
+       TEXT '16SPT'
+
+; 2-23
+;CorComp FDC w/MG EPROM has DSK, DSK1, DSK2, DSK3, DSK4, dsk1, dsk2, dsk3, dsk4, LD-CMDS
+;                           XILR >10, >11, >12, >13, >14, >15, >16, FILES, MGR, MPEEK, VPEEK,
+;                            MPOKE, VPOKE, MOVEM, WRTRG, EXEC, ILR, LR, LLR, RUN.
+;
+; Myarc FDC has FILES, DIR, LR, ILR, LLR.
+;
+; We don't know if other ramdisks / foundation/Myarc/CC have any of these calls.  
+;
+; For now we'll just display generic Floppy Controller.
+;
+MYCTR  BYTE 3
+       TEXT 'LLR'	; 10, Myarc Floppy controller
+
+CTRLER BYTE 5            ;11, other floppy controllers    
+       TEXT 'FILES'
+AXIOM  BYTE 5            ;12   
+       TEXT 'AXIOM'
+HDX1   BYTE 4            ;13
+       TEXT 'HDX1'
+RS232  BYTE 5            ;14   
+       TEXT 'RS232'
+PGRAM  BYTE 2            ;15   
+       TEXT 'PG'
+
+CLOCK  BYTE 5            ;16   
+       TEXT 'CLOCK'
+MYARC  BYTE 4            ;17 
+       TEXT 'PART'
+AVPC   BYTE 5            ;18
+       TEXT 'VIDEO'
+HSGPL  BYTE 4            ;19
+       TEXT 'SCON'
+SPVMC  BYTE 4            ;20    ;Speech card
+       TEXT 'VSM0'
+EVPC   BYTE 4            ;21    ;EVPC/EVPC2 video card
+       TEXT 'EVPC'
+
+CCRAM5 BYTE 5
+       TEXT 'RAMGR'      ;22 CorComp MemoryPlus 512K
+FND128 BYTE 7
+       TEXT 'MEMINIT'    ;23 Foundation 128K w/dsr
+GRAM11 BYTE 7
+       TEXT 'EDITMEM'    ;24 GRAM 1.1 Card
+
+
+GPIB1  BYTE 4		 ;2-23-2020
+       TEXT 'GPIB'	 ;25 GPIB IEEE-488 Card
+PERWDS BYTE 4		 ;2-23-2020	
+       TEXT 'WDS1' 	 ;26 Personality Card; Assume HFDC/SCSI found earlier
+TP1    BYTE 2		 ;2-24-2020
+       TEXT 'TP'         ;27 TI Thermal printer
+
+* fix AMS, Geneve, and unknown card #s if we add another device
+       BYTE 0
+       DATA 0
+       EVEN
+*
+* SuperAMS maps in 4K chunks
+*
+GENEVE DATA 0            0=ti; 1=Geneve (see startup code)
+PLAYWS BSS 32
+*PLAYSV BSS >22
+H0100  DATA >0100
+HFFAA  DATA >FFAA
+
+SAMSDT DATA PLAYWS,$+2
+       CLR  @0(R13)           0=no ams
+       LI   R12,>1E00
+       SBO  0
+**     LI   R2,PLAYSV
+       LI   R1,>FEFF
+       LI   R0,>4000
+AMSLP  AI   R1,>0101
+*      MOV  *R0,*R2+
+       MOV  R1,*R0+
+       CI   R0,>4020
+       JLT  AMSLP
+       C    R1,@>401E         r1=0f0f (mapper)
+       JNE  NOAMS             no, not an ams
+       SETO @0(R13)           YES. AMS
+NOAMS  SBZ  0
+       RTWP
+
+* 7/31/2015 - Not sure I like this Geneve RAMBO code...
+; consider reviewing CFG812/814 LIST files later.
+;
+; Theoretically, the only time RAMBO dsr should be active
+; and visible is if GPL was loaded with ROMpage enabled.
+; Therefore, we probably should remove the paging code.
+******************************
+* SPECIAL EXTRA 1K RAMBO ROS *
+******************************
+ROSLOC EQU  >5800
+ROSPGM MOV  R12,@BO$CRU       Get CRU address
+       LWPI BO$WS             Load BO workspace
+       LI   R0,RAMAPG         CHECK FOR GENEVE SYSTEM
+       LI   R1,RAMAPT
+       MOV  *R0,R2
+       MOV  @RAMPAG,*R0
+       CLR  *R1
+       C    *R0,*R1
+       JNE  GPAGED
+       MOV  R2,*R1
+       JMP  TSAVED
+GPAGED C    *R0,R2
+       JEQ  GSAVED
+TSAVED MOV  R2,@SAVPAG
+GSAVED MOV  *R14,R1           Get page # or Max. # of pages
+       JLT  RAMOFF            >FFFF so turn off 8K page mode!
+       JNE  CHKPAG            >0 so select the 8K page and turn it on!
+       MOV  R12,R1            Save RAMBO CRU address
+       MOV  *R7,R12           Get  PGRAM CRU address
+       JEQ  NOPGRM            Jump if no PGRAM found
+       CLR  R0                Disable bits for PGRAM
+       LDCR R0,0              Turn off the PGRAM card
+NOPGRM MOV  R1,R12            Restore RAMBO CRU addr.
+       A    R10,*R13          Send Max. number to calling program
+RAMOFF CLR  *R15              Clear error flag
+       JMP  BOEXIT            Exit and try another card.
+CHKPAG C    R1,R10            Check if page # higher than this card's max.
+       JLE  SETPAG            Yep, so set the page. Nope, return error
+BO$ERR S    R10,*R14          Sub max. limit from page #
+       SETO *R15              Set error flag
+BOEXIT MOV  R8,*R9            Current status for HORIZON ROS
+       MOV  @SAVPAG,@RAMAPG   Restore GENEVE memory mapper
+       LWPI GPLWS             Load DSR workspace
+       B    @BO$OUT           Exit and try for another card!
+SETPAG DEC  R1                Start at 0 page not 1 page
+       SLA  R1,1              Times 2 for table
+       MOV  @BO$PAG(R1),R0    Get CRU Page value
+       JEQ  BO$ERR            JUST IN CASE! THIS SHOULD NEVER HAPPEN!
+       MOV  R0,*R9            Current status for HORIZON ROS
+       MOV  R0,*R14           Return to calling program the value
+       MOV  R12,*R13          Return to calling program the CRU addr.
+       LDCR R0,0              SET THE PAGE PLUS LEAVE DSR ON!
+       CLR  *R15              Clear error flag
+       LWPI GPLWS             Don't try another card
+       INCT R11               Exit to CALLING PROGRAM!
+       RT
+
+BO$WS  EQU  $+ROSLOC-ROSPGM
+       DATA 0,0,0,0,0,0,0     R0-R6 of workspace
+       DATA >401C             R7    PGRAM CRU addr.
+       DATA >0001             R8    RAMBO status off
+       DATA >401A             R9    RAMBO status addr.
+       DATA >0000             R10   Max. number of pages
+       DATA >0000             R11   of workspace
+BO$CRU EQU  $+ROSLOC-ROSPGM
+       DATA >0000             R12   CRU addr. of this card
+       DATA PAG$RT            R13   CPU PAD value return
+       DATA PAGNUM            R14   CPU PAD page number
+       DATA RT$ERR            R15   CPU PAD error return
+RAMPAG EQU  $+ROSLOC-ROSPGM
+RMPAGE DATA >BABB
+SAVPAG EQU  $+ROSLOC-ROSPGM
+SVPAGE DATA >0000
+BO$PAG EQU  $+ROSLOC-ROSPGM
+BOTEMP BSS  514               Max. 256 mapped pages stored here
+BO$END EQU  $+ROSLOC-ROSPGM   Calc end of USED DSR SPACE
+
+*****************************
+* CFG BUFFER SPACE FOR DATA *
+*****************************
+       DATA >994A,>9640
+BUFFER BSS  80                80 CHAR CPU BUFFER
+       BSS  100		;2-9-2020, increased capacity of BUFFER for ROS LOAD process
+; 
+TABLE  BSS  66                Table of valid cards
+WS     BSS  32                Main workspace
+VDPWS  BSS  32                VDP  workspace
+GETWS  BSS  32                GETSTR workspace
+DLNKWS BSS  10                DSRLNK workspace R0-R4
+TYPE   BSS  22                DSRLNK workspace R5-R15
+NAMBUF BSS  10                DSR name buffer
+RESULT BSS  6                 Result of Number converted
+TENTHO BSS  2                 Temp during converting
+NUMBER BSS  2                 Number to be converted
+VALID  BSS  2                 Valid ROS if >FFFF else >0000
+PWRADR BSS  2                 Address of Power-Up link
+MSEC   BSS  2                 Max. number of sectors
+ASBIG  BSS  2                 Number of sectors left
+VDPS   BSS  2                 Starting VDP address
+VDPE   BSS  2                 Ending VDP address
+CPUPOS BSS  2                 CPU position
+STRLEN BSS  2                 Max string length
+FC     BSS  2                 Foreground color
+BC     BSS  2                 Background color
+CLOC1  BSS  2                 MUST BE AT THE END, NOTHING AFTER IT!!!!!
+       BSS  300		;stab in the dark for now to reserve space 3-21-2020
+
+; WARNING:  CFG IS saving information after this label. 
+; There should have been a BSS or dummy EQU to inform us! 
+
+       DATA >DEAD,>BEEF
+*      DATA SLAST
+*      DATA 0
+SLAST
+**************************
+* SPECIAL DUMMY ROS CODE *
+**************************
+       DORG >57EE
+BOCALL DATA >0000            No more DSR CALL's (>A)
+       DATA BO$LNK           Address of >B0 call
+       DATA >01B0            Length byte/Callname
+DSR8ON DATA >8001            8K PAGES ON / 8K DSR ON
+BO$OUT LDCR @>4014,0         2K PAGES ON / 6K DSR ON
+       RT                    RETURN WITH CARD OFF!
+BO$LNK LDCR @DSR8ON,0        Get rest of code in 8K DSR
+       JMP  BO$OUT           (IN CASE RAMBO NOT INSTALLED!)
+
+;end

@@ -1,0 +1,537 @@
+* CFG Version 8.42c       cfg-s2
+*********************************************
+*                                           *
+*        RAMDISK CONFIGURE PROGRAM          *
+*                                           *
+* COPYRIGHT 1985, HORIZON COMPUTER, LIMITED *
+* COPYRIGHT 1988, BUD MILLS SERVICES        *
+* COPYRIGHT 1989, OASIS PENSIVE ABACUTORS   *
+*                                           *
+*        -- ALL RIGHTS RESERVED --          *
+*********************************************
+*                                           *
+* Updated 2012-2020, InsaneMultitasker (TT) *
+*                                           *
+*********************************************
+*
+* Utilities and subprograms including:
+*  - number/string
+*  - VDP
+*  - DSRLNK
+*
+* 
+**********************
+* MISC. SUB-PROGRAMS *
+**********************
+GETNBR MOV  @VLOC1(R7),R0 	;Get vdp address
+GETNBS MOV  R11,R14
+       BL   @CLRCNV
+       LI   R1,RESULT
+       BLWP @GETSTR      Go get a new call length
+       BLWP @ATOB        Convert to binary
+       B    *R14
+ 
+FIGCLR MOV  @BC,R0       Put Foreground color in R0
+       DEC  R0           Make it real
+       SLA  R0,4         2nd nibble over
+       MOV  @FC,R1       Put background color in R1
+       DEC  R1           Make it real too
+       SOC  R0,R1        OR em
+       MOV  R1,@>4016
+       LI   R0,>0700
+       MOVB R0,R1
+       MOV  R1,R0
+       BLWP @VWTR
+       RT
+ 
+CLRCNV LI   R4,4
+       LI   R5,>2000
+CLRCN  MOVB R5,@RESULT(R4)
+       DEC  R4
+       JOC  CLRCN
+       RT
+ 
+BNC    MOV  R11,R14
+BNC1   LWPI >83E0
+       BL   @>E
+       LWPI WS
+       CB   @>8375,@FF
+       JNE  BNC1
+       B    *R14
+ 
+CLS    MOV  R11,R14
+       CLR  R0
+       BL   @VWSET
+       LI   R0,960
+       LI   R1,>2000
+CLS1   MOVB R1,@>8C00
+       DEC  R0
+       JNE  CLS1
+       B    *R14
+ 
+************************
+* FIND A DSR NAME/CALL *
+************************
+FINDSR SBO  0
+       LI   R2,>4000
+       A    *R11+,R2
+       MOV  *R11+,R3
+       MOV  *R11+,@FINDOK+2
+       CB   @>4000,@DSRHDR
+       JNE  ENDSR
+LNKDSR MOV  *R2,R2
+       JEQ  ENDSR
+       MOV  R3,R4
+       MOV  R2,R0
+       C    *R0+,*R0+
+       MOVB *R4,R5
+       SRL  R5,8
+       INC  R5
+CHKDSR CB   *R0+,*R4+
+       JNE  LNKDSR
+       DEC  R5
+       JNE  CHKDSR
+FINDOK LI   R11,>0000
+       DEC  R1
+ENDSR  SBZ  0
+       INC  R1
+       RT
+ 
+***************************
+* CONVERT NUMBER TO ASCII *
+***************************
+* 3/21/2014 - DISPLAY 4 CHARACTERS
+NUMASC MOV  *R11+,R1
+*       LI   R2,4
+       LI   R2,5              3/21
+       MOV  R0,R4
+       JMP  NUMASE
+NUMASD MOV  R3,R4
+       JEQ  NUMASF
+NUMASE CLR  R3
+       DIV  @DECTEN,R3
+       JNO  NUMASI
+NUMASF MOVB @SPACE,*R1
+NUMASH DEC  R1
+       DEC  R2
+       JNE  NUMASD
+       RT
+NUMASI A    @HEX30,R4
+       SLA  R4,8
+       MOVB R4,*R1
+       JMP  NUMASH
+ 
+***************************************
+* NUMBER CONVERTER                    *
+*                                     *
+* ASCII to Binary                     *
+* Up to a 5 place long ASCII number   *
+* located in RESULT is converted to   *
+* a binary 16 bit number, located in  *
+* NUMBER.   Place the ASCII string in *
+* RESULT, then BLWP @ATOB and your    *
+* number will be in NUMBER on RTWP.   *
+*                                     *
+* Binary to ASCII                     *
+* Binary 16 bit number to a 5 place   *
+* left justified ASCII number.        *
+* Place the number in address NUMBER, *
+* then BLWP @BTOA.                    *
+* Result will be found in RESULT.     *
+***************************************
+BTOA   DATA VDPWS,BTOA0
+ATOB   DATA VDPWS,ATOB0
+ 
+* ------ Binary to ASCII ------ *
+BTOA0  LI   R9,10000
+       MOV  R9,@TENTHO
+       LI   R9,5
+       LI   R10,RESULT
+       MOV  @NUMBER,R5
+BTOA1  CLR  R4
+       DIV  @TENTHO,R4
+       AI   R4,48
+       SWPB R4
+       MOVB R4,*R10+
+       CLR  R6
+       MOV  @TENTHO,R7
+       DIV  @DECTEN,R6
+       MOV  R6,@TENTHO
+       DEC  R9
+       JNE  BTOA1
+       CLR  R9
+BTOA2  CB   @RESULT(R9),@HEX30+1
+       JNE  BTOA3
+       INC  R9
+       CI   R9,5
+       JNE  BTOA2
+BTOA3  CLR  R5
+BTOA4  CI   R9,5
+       JEQ  BTOA5
+       MOVB @RESULT(R9),@RESULT(R5)
+       INC  R5
+       INC  R9
+       JMP  BTOA4
+BTOA5  LI   R3,>2000
+BTOA6  CI   R5,5
+       JEQ  BTOA7
+       MOVB R3,@RESULT(R5)
+       INC  R5
+       JMP  BTOA6
+BTOA7  RTWP
+ 
+*----- ASCII to BINARY -------*
+ATOB0  CLR  R1
+       LI   R2,5
+       LI   R4,>2000
+ATOB1  DEC  R2
+       JNC  ATOB2
+       CB   @RESULT(R2),R4
+       JNE  ATOB1
+       INC  R1
+       JMP  ATOB1
+ATOB2  CLR  @NUMBER
+       LI   R0,5
+       S    R1,R0
+       MOV  R0,R1
+       JEQ  ATOB4
+       LI   R2,5
+       LI   R6,1
+ATOB3  DEC  R2
+       JNC  ATOB4
+       CB   @RESULT(R2),R4
+       JEQ  ATOB3
+       MOVB @RESULT(R2),R8
+       SRL  R8,8
+       AI   R8,->0030
+       MPY  R6,R8
+       A    R9,@NUMBER
+       MOV  R6,R5
+       MPY  @DECTEN,R5
+       DEC  R1
+       JNE  ATOB3
+ATOB4  RTWP
+ 
+****************************************
+* Get a string from the user           *
+*                                      *
+* Entry: BLWP @GETSTR                  *
+*                                      *
+* Required arguments:                  *
+* R0=VDP location to accept at         *
+* R1=CPU location to put string        *
+* R2=Max length of input string        *
+*                                      *
+* If R2=0 then no cursor is displayed  *
+* and one keyvalue is returned in      *
+* the MSB of R3.                       *
+*                                      *
+* SETO @LCFLAG to recieve upper and    *
+* lowercase characters.                *
+*                                      *
+* Output:                              *
+* R3 Character pressed to exit routine *
+*                                      *
+****************************************
+GETSTR DATA GETWS,STR1
+LCFLAG DATA >0000
+KDLY   DATA >0000
+KR3    DATA >0000
+OLDCHR BYTE >00
+LASTKY BYTE >00
+KEYTBL BYTE 32,3,4,7,15,9,8,13,10,11
+KEYADR DATA STR5,F1,F2,F3,STRBYE,RA,LA
+       DATA STRBYE,STRBYE,STRBYE
+STR1   LI   R6,>0300     Key mode to scan in MSB
+       MOV  *R13,R0      VDP position
+       MOV  @2(R13),R1   CPU position
+       MOV  @4(R13),R2   Max length of string
+       JEQ  STR5         R2 is clear
+       MOV  R0,@VDPS     Save starting VDP position
+       MOV  R1,@CPUPOS   Save CPU location
+       MOV  R2,@STRLEN   Save max string length
+       MOV  R2,@VDPE
+       A    @VDPS,@VDPE  Save ending VDP location
+       DEC  @VDPE
+GRESET LI   R9,1         String position
+       CLR  R10          Flag for insert on/off (0=off)
+STR2   BL   @PUTCSR      Go put cursor up
+       CLR  R4           Flag for cursor blink (0=cursor on)
+STR4   MOV  @KR3,R3
+STR5   MOVB R6,@>8374    Keyboard mode to scan in MSB of R6
+       LWPI >83E0        Go check keyboard
+       BL   @>E
+       LWPI GETWS
+       MOV  R2,R2        One keystroke routine?
+       JEQ  STR7
+       CB   @>8375,@LASTKY
+       JNE  STR7         Not a repeater
+       MOV  @KDLY,@KDLY  First time through?
+       JNE  STR6
+       DEC  R3           Yes a repeater
+       JNE  STR5
+       LI   R3,80        Delay between auto repeat
+       MOV  R3,@KR3
+       JMP  STR8
+STR6   LI   R3,700       First delay before auto repeat
+       CLR  @KDLY
+       JMP  STR5
+STR7   LI   R5,>00FF     Not a repeat key
+FF     EQU  $-1
+       MOV  R5,@KDLY
+       MOVB R5,@LASTKY
+       SWPB R5
+       CB   @>8375,R5    Has a key been pressed?
+       JNE  STR8         Yep
+       MOV  R2,R2
+       JEQ  STR5
+       DEC  R3
+       JNE  STR5         Nope
+       LI   R3,400
+       MOV  R3,@KR3
+       MOV  R4,R4        Is the cursor on or off?
+       JNE  STR2
+       MOVB @OLDCHR,R1   The cursor is on
+       BLWP @VSBW
+       SETO R4           Now the cursor is off
+       JMP  STR4
+STR8   MOV  R2,R2        Single keystroke routine?
+       JEQ  JUST1
+       MOVB @OLDCHR,R1
+       BLWP @VSBW        Put up old char in case cursor is up
+JUST1  CLR  R1
+       MOVB @>8375,R1    Key press is in R1
+       MOVB R1,@LASTKY
+       LI   R4,>7E00     126 is the highest char I'll accept
+       CB   R1,R4
+       JGT  STR5         Ignore the keystroke
+       LI   R4,>2000     32 is the lowest normal character
+       CB   R1,R4
+       JHE  STR12
+       MOV  R2,R2        Single keystroke routine?
+       JEQ  STRBYE
+       LI   R4,9         9 valid control characters in KEYTBL
+STR10  CB   @KEYTBL(R4),R1
+       JEQ  STR11
+       DEC  R4
+       JNE  STR10
+STR11  SLA  R4,1         Make it a word indexer
+       MOV  @KEYADR(R4),R4
+       CLR  R10          Insert off
+       B    *R4          Address of CTRL character routine is in R4
+STR12  MOV  @LCFLAG,@LCFLAG
+       JNE  LCOK         The user wants lowercase I see
+       CI   R1,>6000
+       JLE  LCOK
+       AI   R1,->2000
+LCOK   MOVB R1,@OLDCHR   Save the character
+       MOVB R1,@LASTKY
+       MOV  R2,R2        Single keystroke routine?
+       JEQ  STRBYE
+       MOV  R10,R10      Insert on?
+       JEQ  NOINS
+       BL   @DOINS       Yes
+NOINS  BLWP @VSBW        Put new character on the screen
+       C    R0,@VDPE     Are we at the end of the input?
+       JEQ  STRBYE
+       INC  R0           Nope
+       INC  R9           Position in the string
+CTLRTN BL   @PUTCSR      This is the return for all control key routines
+       CLR  R4
+STR13  JMP  STR5
+STRBYE MOV  R1,@6(R13)   Place exit key in R3 of callers WS
+       MOVB @OLDCHR,R1   Restore the character under the cursor
+       MOV  R2,R2
+       JEQ  BYESTR
+       BLWP @VSBW
+       MOV  @VDPS,R0
+       MOV  @CPUPOS,R1   Put new string in CPU memory
+       MOV  @STRLEN,R2
+       BLWP @VMBR
+BYESTR RTWP              Bye
+DOINS  C    R0,@VDPE     Are we at the end of the input?
+       JEQ  INSDON
+       MOV  @CPUPOS,R1   Use CPUPOS as a buffer
+       S    R9,R2        Number of bytes to read from screen
+       JEQ  INSDON
+       BLWP @VMBR
+       INC  R0           Move over one place
+       BLWP @VMBW
+       DEC  R0           Restore screen position
+       MOV  @STRLEN,R2   Restore max length
+       MOV  @OLDCHR,R1   Restore keypress value
+INSDON B    *R11
+PUTCSR BLWP @VSBR        Read character on the screen
+       MOVB R1,@OLDCHR   Save it
+       LI   R1,>1E00
+       BLWP @VSBW        Slap up cursor
+       B    *R11
+F1     S    R9,R2
+       INC  R2
+       MOV  @CPUPOS,R1   Read string into CPU
+       BLWP @VMBR
+       INC  R1           Move CPU position over one byte
+       DEC  R2           One less byte to write
+       JEQ  DELDON       If we are at the end of the string
+       BLWP @VMBW
+DELDON A    R2,R0        VDP location to end of string
+       LI   R1,>2000
+       BLWP @VSBW        Write over old last char with a space
+       S    R2,R0        Restore VDP location
+       MOV  @OLDCHR,R1
+       MOV  @STRLEN,R2   Restore max length
+       JMP  CTLRTN
+F2     SETO R10          Set insert flag high
+       B    @STR5
+F3     MOV  @VDPS,R0     VDP string start address
+       LI   R1,>2000
+F3LP   BLWP @VSBW        Fill it with spaces for R2 bytes
+       INC  R0
+       DEC  R2
+       JNE  F3LP
+       MOV  @STRLEN,R2   Restore max length
+       MOV  @VDPS,R0
+       B    @GRESET
+RA     C    R0,@VDPE     At end of string?
+       JEQ  RADON
+       MOVB @OLDCHR,R1
+       BLWP @VSBW
+       INC  R0
+       INC  R9
+RADON  B    @CTLRTN
+LA     C    R0,@VDPS     At begining of string?
+       JEQ  RADON
+       MOVB @OLDCHR,R1
+       BLWP @VSBW
+       DEC  R0
+       DEC  R9
+       JMP  RADON
+ 
+**********
+* DSRLNK *
+**********
+DSRLNK DATA DLNKWS,DLENTR
+DLENTR MOV  *R14+,R5
+       SZCB @SPACE,R15
+       MOV  @>8356,R0
+       MOV  R0,R9
+       AI   R9,-8
+       BLWP @VSBR
+       MOVB R1,R3
+       SRL  R3,8
+       SETO R4
+       LI   R2,NAMBUF
+LNKQLP INC  R0
+       INC  R4
+       C    R4,R3
+       JEQ  LNKQLN
+       BLWP @VSBR
+       MOVB R1,*R2+
+       CB   R1,@DOT
+       JNE  LNKQLP
+LNKQLN MOV  R4,R4
+       JEQ  LNKERR
+       CI   R4,7
+       JGT  LNKERR
+       MOV  R4,@>8354
+       INC  R4
+       A    R4,@>8356
+SROM   LWPI >83E0
+       CLR  R1
+       LI   R12,>1200
+       JMP  NOT20
+NOROM  SBZ  0
+NOOFF  AI   R12,>0100
+       CI   R12,>1200
+       JEQ  NODSR
+       CI   R12,>2000
+       JNE  NOT20
+       LI   R12,>1000
+NOT20  MOV  R12,@>83D0
+       SBO  0
+       LI   R2,>4000
+       CB   *R2,@DSRHDR
+       JNE  NOROM
+       A    @TYPE,R2
+       JMP  SGO2
+SGO    MOV  @>83D2,R2
+       SBO  0
+SGO2   MOV  *R2,R2
+       JEQ  NOROM
+       MOV  R2,@>83D2
+       INCT R2
+       MOV  *R2+,R9
+       MOVB @>8355,R5
+       JEQ  NAME2
+       CB   R5,*R2+
+       JNE  SGO
+       SRL  R5,8
+       LI   R6,NAMBUF
+NAME1  CB   *R6+,*R2+
+       JNE  SGO
+       DEC  R5
+       JNE  NAME1
+NAME2  INC  R1
+       BL   *R9
+       JMP  SGO
+       SBZ  0
+       LWPI DLNKWS
+       MOV  R9,R0
+       BLWP @VSBR
+       SRL  R1,13
+       JNE  IOERR
+       RTWP
+NODSR  LWPI DLNKWS
+LNKERR CLR  R1
+IOERR  SWPB R1
+       MOVB R1,*R13
+       SOCB @SPACE,R15
+       RTWP
+ 
+*****************
+* VDP utilities *
+*****************
+VWTR   DATA VDPWS,VWTR1
+VSBR   DATA VDPWS,VSBR1
+VMBR   DATA VDPWS,VMBR1
+VSBW   DATA VDPWS,VSBW1
+VMBW   DATA VDPWS,VMBW1
+VWTS   DATA VDPWS,VWTS1
+VWSET  ORI  R0,>4000
+VRSET  SWPB R0
+       MOVB R0,@>8C02
+       SWPB R0
+       MOVB R0,@>8C02
+       RT
+VDATA  MOV  @4(R13),R2
+       MOV  @2(R13),R1
+       MOV  *R13,R0
+       RT
+VWTR1  MOV  *R13,R0
+       ORI  R0,>8000
+       BL   @VRSET
+       RTWP
+VSBR1  BL   @VDATA
+       BL   @VRSET
+       MOVB @>8800,@2(R13)
+       RTWP
+VMBR1  BL   @VDATA
+       BL   @VRSET
+VMBR2  MOVB @>8800,*R1+
+       DEC  R2
+       JNE  VMBR2
+       RTWP
+VSBW1  BL   @VDATA
+       BL   @VWSET
+       MOVB R1,@>8C00
+       RTWP
+VMBW1  BL   @VDATA
+VWTS2  BL   @VWSET
+VMBW2  MOVB *R1+,@>8C00
+       DEC  R2
+       JNE  VMBW2
+       RTWP
+VWTS1  MOV  *R14+,R0
+       MOV  *R14+,R1
+       MOV  *R14+,R2
+       JMP  VWTS2

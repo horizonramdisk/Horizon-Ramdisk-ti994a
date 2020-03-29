@@ -1,0 +1,1345 @@
+* CFG Version 8.42c   27 March 2020  CFG-s1
+********************************************* R0-R8 temp
+*                                           * R9    ADDNUM
+*        RAMDISK CONFIGURE PROGRAM          * R10   LINK
+*                                           * R11   RT ADDR.
+* COPYRIGHT 1985, HORIZON COMPUTER, LIMITED * R12   CRUBAS
+* COPYRIGHT 1988, BUD MILLS SERVICES        * R13   TABLE
+* COPYRIGHT 1989, OASIS PENSIVE ABACUTORS   * R14   SAVRT
+*                                           * R15   RAMBO FLAG
+*        -- ALL RIGHTS RESERVED --          *
+*********************************************
+*                                           *
+* Updated 2012-2020, InsaneMultitasker (TT) *
+*                                           *
+*********************************************
+* DATE      CHANGE
+* --------  -------
+* 3.3.2012  Version 8.32
+* 3.3.2012  SIZE32 routine added to account for 3200 sector disks
+*           Bitmap routine updated to account for formatting >1600 sectos
+* 3.10.2012 Fixed rack boundary code in format routine. Had misinterpreted
+*           the code and incorrectly tried to calculate bitmap boundaries
+*           versus rack (2k) boundaries.  Code simplified and comments added
+*           for potential 12800 sector drives.
+* 7.5.2015  Implemented CRC Test during initial ROS load. If CRC val=0, no
+*           CRC is expected. This will maintain backward compatibility. However
+*           we should consider whether blanking it out is appropriate, whether
+*           for testing or avoiding CRC.  (Inclined to leave this option)
+* 7.6.2015  See GOODCR; Need to clear CRC (4006) location to ensure the vector
+*           is not seen by other applications.  (done)
+*
+* 5.2.2016  Verify display for sectors/ram
+*
+* 5.7.2017  Line 836 has hard-coded value (8188) for ROS in the CRC calcs.
+*
+; 1-22-2020	DISVER contains hard-coded offsets for ROS version.  Following cleanup of the
+;		Logo/version info, need to adjust CFG. However, keep in mind changing the offsets
+; 		will render earlier versions incompatible (for display at least)
+;
+; 1.25.2020	WARNING added for Formatting and Deleting drives.  Not perfect, as a reformat existing
+; 		drive (using existing allocation) would be a good option. 
+;		Changed the keypress to "F" to avoid a double "Y" during format question. 
+;
+; 1.25.2020    *The Delete drive option does not always show up for the last drive. Seems if you
+;		moved to the next row, CFG locks out the delete option. 
+; 2.8.2020	Added display text for GOOD crc and NULL crc during load process.
+; 		Verified CFG functions with ROSCRC program to test/load CRC values
+;
+; CFG 8.42c
+; 2.15.2020 	Discovered FONT loader is hardcoded to load chars 30-97 starting at address
+;        	58F0. The OPA/BMS title screen info was removed shifting the starting 
+;		address, meaning FONTs will overwrite portion of the 2k ROS code.  
+;    FIX:  	Pointers added for MENU and CFG at >5804 and >5806
+;
+; REMINDER: HARD CODED ROS SIZE=8188. Adjust again if/when we move CRC value to end of file.
+;
+; 3.21.2020     Bob C. discovered the powerup flag wasn't saved/restored.
+;                 code was saving/restoring address, not the value *address. 
+;
+; 3.27.2020 	Fixed powerup save/restore. 
+;
+**********************
+* DISPLAY CFG SCREEN *
+**********************
+START  LI   R13,TABLE
+CONFIG MOV  *R13,R12
+       JEQ  START
+       MOV  @2(R13),R1
+       MOV  R1,R3
+       BL   @CRDSET
+       LI   R9,3              32K*8 ADDNUM
+CONFIH LI   R10,>0001         32K*8 LINK
+       C    @-2(R13),@CONFIH+2
+       JH   CONFII
+       LI   R9,9               8K*8 ADDNUM
+       LI   R10,>0700          8K*8 LINK
+CONFII BL   @CLS
+       BLWP @VWTS
+       DATA 0,SCRLN2,160
+       LDCR R10,0
+       ABS  @VALID            Check if 7.38 LOADED
+       JNE  OKCARD            Yep, so build the full screen
+       B    @OPT1             Goto to menu control
+
+; 1-22-2020	
+; 	CLOC1 is found at the END of the program. The label itself reserves 2 bytes! 
+;	There was no BSS or indicator that space AFTER CLOC1 is used for temporary storage
+;
+; 	Computed space based on below code:
+;	- 2 x 10 = 20 bytes for CALL pointers
+;	- 2	color
+;	- 2	max sectors (is this per disk or for the ramdisk itself? probably latter)
+;	- 2 powerup address
+;	=== 
+;	26 bytes for this process
+;  	reserved 300 bytes for now and future.
+; 
+;CLOC1 TABLE ORDER
+;      CALL1 thru CALL9
+;      COLORS
+;      MAXIUM SECTOR COUNT
+;      POWER-UP ADDRESS
+
+OKCARD MOV  @>400A,R1    call name start address
+       LI   R2,CLOC1     POINT TO INFO TABLE
+       AI   R1,4         point to call names
+       LI   R3,9         SET COUNTER
+UBLD   MOV  R1,*R2+      Build pointers for call list
+       AI   R1,10        go to next address's byte length
+       DEC  R3
+       JNE  UBLD         done yet? no
+
+       LI   R1,>4016     POINT TO COLOR
+       MOV  R1,*R2+      FOREground
+       MOV  @MSEC,*R2+   Get max sectors
+
+; The next few lines extract the powerup flag/address. 
+; -Get CALL1 pointer address (via subprogram pointer >400A)
+; -Get address of CALL1
+; -subtract 6 to point to PWRNXT
+; -save the flag/address
+;
+       LI   R1,>400A
+       MOV  *R1,R1
+       AI   R1,-6
+       MOV  R1,@PWRADR
+       LI   R1,>4004
+       MOV  *R1,*R2	;put in buffer
+; data collection complete
+
+       LI   R0,240       put up header
+       LI   R1,HEADER
+       LI   R2,8
+       LI   R3,3
+PUTHDR BLWP @VMBW
+       AI   R0,15
+       DEC  R3
+       JNE  PUTHDR
+       LI   R1,ULINE     put up underline
+       LI   R3,3
+       AI   R0,-5
+PUTULN BLWP @VMBW
+       AI   R0,15
+       DEC  R3
+       JNE  PUTULN
+
+; build display from information we just gathered.  R4=pointer
+;
+       LI   R4,CLOC1	 ; our buffer
+       LI   R6,3         3 columns of names
+       LI   R0,321       Starting VDP  address
+       LI   R2,5         NAME LENGTH
+LSTCTB LI   R5,3
+LSTCAL MOV  *R4+,R3
+       MOVB *R3+,R1
+       AI   R1,>3000
+       BLWP @VSBW        Length of call
+       INCT R0
+       MOV  R3,R1        CPU location
+       BLWP @VMBW
+       DECT R0           Get back to VDP length position
+       AI   R0,80        2 linefeeds
+       DEC  R5           counter
+       JNE  LSTCAL
+       AI   R0,-225
+       DEC  R6
+       JNE  LSTCTB
+       BLWP @VWTS
+       DATA 600,FCOL,40
+       BLWP @VWTS
+       DATA 680,FCOL+40,40
+       LI   R1,>0700
+       MOV  *R4+,R5
+       MOV  *R5,R5
+       MOV  R5,R0
+       MOVB R1,R0
+       BLWP @VWTR
+       MOV  R5,R6
+       ANDI R6,>000F
+       INC  R6
+       MOV  R6,@FC
+       MOV  R6,@NUMBER   get text color
+       BLWP @BTOA
+       BLWP @VWTS
+       DATA 615,RESULT,2
+       MOV  R5,R6
+       SRL  R6,4
+       INC  R6
+       MOV  R6,@BC
+       MOV  R6,@NUMBER
+       BLWP @BTOA        get screen color
+
+       BLWP @VWTS
+       DATA 695,RESULT,2
+       MOV  *R4+,@NUMBER 	;GET MAX SECTORS
+       BLWP @BTOA        	;CONVERT TO ASCII
+       BLWP @VWTS
+       DATA 634,RESULT,5
+
+       LI   R0,714
+       LI   R1,'YN'      Is powerup enabled?
+       MOV  *R4+,R5	; check address
+       MOV  *R5,*R5	; and now check the powerup address/value
+       JNE  NOPWR
+       SWPB R1
+NOPWR  BLWP @VSBW	;display R1 (either Y or N)
+
+; Now, let's check the ROS on this HRD for the header:
+; >AA81 (AA header; 81 is the version)
+
+       LI   R1,>5800
+FNDVER C    *R1+,@DSRHDR
+       JEQ  DISVER
+       CI   R1,>6000
+       JNE  FNDVER
+       JMP  OPT1	none found, skip version display
+
+; Fix hardcoding of version information 
+
+DISVER BLWP @VWTS
+       DATA 841,VERLN,8
+       LI   R3,3	three version snips	
+       LI   R2,10	
+       A    R3,R1
+       LI   R0,850
+NXTVER BLWP @VMBW
+       A    R2,R0	next position on line
+       AI   R1,17	next position of ROS version code (HARDCODED; fix with logo removal)
+       DEC  R3
+       JNE  NXTVER
+
+********
+* MENU *
+********
+OPT1   BLWP @VWTS
+       DATA 920,OPTNS,40
+       ABS  @VALID
+       JNE  OPT1A
+       BLWP @VWTS
+       DATA 936,NOPTNS,22
+OPT1A  MOV  R15,R15
+       JEQ  OPT1K
+       BLWP @VWTS
+       DATA 952,ROPTNS,8
+       BLWP @VWTS
+       DATA 761,USRLN,9
+       SBO  0
+       C    @>402E,@NOUSER
+       JEQ  OPT1B
+       BLWP @VWTS
+       DATA 771,>4025,8
+OPT1B  C    @>403C,@NOUSER
+       JEQ  OPT1C
+       BLWP @VWTS
+       DATA 780,PWRLN,8
+OPT1C  C    @>403E,@NOUSER
+       JEQ  OPT1K
+       BLWP @VWTS
+       DATA 790,INTLN,9
+OPT1K  SBZ  0                 Turn off the CARD
+       BL   @BNC              Wait until NO KEY PRESSED
+       CLR  R2                Scan keyboard for a key press
+       BLWP @GETSTR
+       LI   R2,3              Start with the Q,N,L keys
+       ABS  @VALID            Check if VALID ROS LOADED
+       JEQ  NXT0              Nope, so don't allow S,F,E,D keys
+       C    *R2+,*R2+         VALID ROS add 4 more keys
+       MOV  R15,R15           Check if RAMBO on this card
+       JEQ  NXT0              Nope, so don't allow the U key
+       INC  R2                Yep, so check the U key also
+NXT0   LI   R0,OPTTBL         Start at top of KEY  table
+       LI   R1,ADRTBL         Start at top of ADDR table
+NXT1   MOV  *R1+,R11          Get the branch address for a key
+       CB   R3,*R0+           Check if this key was pressed
+       JEQ  RUNOPT            Yep, so execute the subprogram
+       DEC  R2                Nope, so check if finished
+       JNE  NXT1              Nope, so compar some more
+       JMP  OPT1K             Wrong key pressed, wait some more
+RUNOPT RT                     Correct key pressed, run the prog.
+
+***************************
+* FONT (Load CHARA1 file) *
+***************************
+; ROS stores 784 bytes (8*98) chars starting at 30. 
+; CFG only loads 97 of these chars
+; 
+; 2.15.2020 - HARDCODED; this will currently overwrite portions of ROS
+; 		due to the removal of the BMS/OPA logo
+; 2.16.2020 - Replaced hardcoded address with static pointer. Updated MENU 7.39
+;	      Other MENU programs will be similarly affected as v7.39
+;             9640MENU does not utilize the ROS font
+;
+FONT   BL   @GODSR
+       DATA FONTLN,FNTNAM
+       LDCR R10,0
+       LI   R0,>08F0
+	
+;;      LI   R1,>58F0	;2.15.2020 - Naughty hardcoded address
+
+       mov  @>5806,r1	;2-16-2020, replace hardcoded address with 'static' pointer. Best we can do.
+       LI   R2,97*8
+       BLWP @VMBR
+       JMP  OPT1
+
+********
+* EDIT *
+********
+EDIT   BLWP @VWTS
+       DATA 920,EDMENU,40
+       SBO  0            Turn card on
+       CLR  R7           To index the tables
+GETCLN LI   R2,1
+       MOV  @VLOC1(R7),R0 	;Get vdp address
+       MOV  @CLOC1(R7),R1 	;Get call length address
+       BLWP @GETSTR      Go get a new call length
+       BL   @CLRCNV      Clear the number convert buffer
+       MOVB *R1,@RESULT  Move new ascii char into convert buffer
+       BLWP @ATOB        Convert to binary
+       MOV  @NUMBER,R2   Validate it as a number, 1-5
+       JEQ  GETCLN
+       CI   R2,5         max call name length
+       JGT  GETCLN
+       MOVB @NUMBER+1,*R1
+       CI   R3,>0B00     up?
+       JEQ  UPARO
+       CI   R3,>0A00     down?
+       JEQ  DWNARA
+       CI   R3,>0F00     F9?
+       JEQ  YEBACK
+       INC  R1           Move over 1 to call name
+       INCT R0           VDP address +2
+       LI   R2,5         Max length of call name
+GETAGN BLWP @GETSTR      Now go get a new call name
+       CI   R3,>0F00     F9?
+       JNE  NOBACK
+YEBACK B    @OPT1        Back to menu
+NOBACK CI   R3,>0B00     CR?
+       JEQ  UPARO
+DWNARA INCT R7
+       CI   R7,18        Are we at the end of the calls?
+       JEQ  FCLR         Yep, almost done
+       JMP  GETCLN       Go get next item
+UPARO  MOV  R7,R7        are we at the first element?
+       JEQ  GETCLN
+       DECT R7           no
+       JMP  GETCLN
+FCLR   LI   R2,2         first element, color, is 2 long
+       BL   @GETNBR
+       MOV  @NUMBER,R4
+       JEQ  FCLR         no "0" for color
+       CI   R4,16
+       JGT  FCLR
+       C    R4,@BC       is FC=BC?
+       JEQ  FCLR
+       MOV  R4,@FC       temp storage
+       BL   @FIGCLR
+       CI   R3,>0F00     F9?
+       JEQ  YEBACK
+       CI   R3,>0B00
+       JEQ  UPARO        go back to the calls
+       INCT R7
+BCLR   LI   R2,2         do the same for background color
+       BL   @GETNBR
+       MOV  @NUMBER,R4
+       JEQ  BCLR         no "0" for color
+       CI   R4,16
+       JGT  BCLR
+       C    R4,@FC       BC=FC?
+       JEQ  BCLR
+       MOV  R4,@BC
+       BL   @FIGCLR
+       CI   R3,>0F00
+       JEQ  YEBACK
+       CI   R3,>0B00
+       JNE  POWR
+       DECT R7
+       JMP  FCLR
+POWR   INCT R7
+POWR0  MOV  @VLOC1(R7),R0     powerup mode
+       MOV  @CLOC1(R7),R6
+       LI   R1,RESULT         just a buffer
+       LI   R2,1
+POWR1  BLWP @GETSTR
+       CLR  R1
+       BLWP @VSBR
+       CI   R1,>5900
+       JNE  POWR2
+       MOV  @PWRADR,*R6       Put powerup address in *R6
+       JMP  POWR3
+
+POWR2  CI   R1,>4E00
+       JNE  POWR0
+       CLR  *R6               No powerup!
+POWR3  DECT R7
+       CI   R3,>0B00
+       JEQ  BCLR
+       CI   R3,>0F00
+       JNE  POWR
+       B    @OPT1
+
+*************
+* CONFIGURE *
+*************
+; After formatting a drive, the routine Branches here to start over.
+;
+;Format of screen is as follows: (blank lines between rows)
+;
+;  #  NAME______  WP FORMAT  SIZE 
+;  5  DSK5.       N     N    3200 
+;
+;  6 
+;
+;  7
+;
+
+SCFG   BL   @CLS              SETUP OF CONFIG SCREEN
+       BLWP @VWTS
+       DATA 0,SETUP,40
+       LI   R0,40
+       MOVB @ULINE,R1
+WLINE  BLWP @VSBW		;print double line
+       INC  R0
+       CI   R0,79
+       JLE  WLINE
+
+       LDCR R10,0		; enable via R10
+       MOV  @DNTBL,R7		; Get Drive table pointer
+       MOV  R7,R8		; save it for use when editing a drive
+
+       BL   @LS
+
+       LI   R6,80
+       CLR  R5
+       MOV  @>4008,R3
+
+LOOP1A AI   R3,8              WRITE THE CONFIG SCREEN
+       MOV  *R3+,R1
+       MOV  R6,R0
+       A    @DNUMB,R0
+       BLWP @VSBW
+       LI   R1,AST
+       MOV  @N,@PROTT		;start with 'NY'
+       MOV  *R7+,R4		; protect flag?
+       JEQ  NOTPRO		; 0 = NOT protected
+       JGT  NOTPRO		; <>0 protected and
+       SWPB @PROTT		;set display byte to 'YN'
+       ABS  R4
+NOTPRO MOV  *R7+,@NUMBER	; get SIZE of drive
+       JEQ  LOOP1D		; if 0, skip remaining display
+       BLWP @BTOA		; convert to ASCII (5 digit max) and put @result
+       MOV  R6,R0		; screen location
+       A    @SIZE,R0		; add offset for next display
+       LI   R1,RESULT		
+       LI   R2,4
+       BLWP @VMBW		; DISPLAY size of drive
+
+       LI   R1,>5800		???
+       MOVB R10,R10		?? some kind of 8- and 16- bit flag
+       JEQ  NSWAP
+       SWPB R4
+NSWAP  LDCR R4,0		??
+
+LOOP1D MOV  R6,R0		;current row/location for this line
+       A    @DNAME,R0		;add name offset
+       LI   R2,10
+       BLWP @VMBW		;DISPLAY NAME
+
+       MOV  R6,R0		; current row
+       A    @WPO,R0		; write protect loc
+PROTT  EQU  $+2
+       LI   R1,'NY'
+       BLWP @VSBW		; DISPLAY Write Prot  Y/N
+       AI   R6,80		; skip a line and continue with next drive
+       INC  R5		
+       CI   R5,10		; 10 Max (consider EQUating later if we add drives)
+       JNE  LOOP1A
+
+; end of writing the current drives/config
+
+; Now, let's start the editing.
+; R8 was saved at SCFG so it points to drive table
+;
+       LI   R6,1
+       LI   R7,80
+GD1    MOV  *R8,R0            SETUP OF CONFIG EDIT
+       ABS  R0
+       MOVB R10,R10
+       JEQ  GD2
+       SWPB R0
+GD2    LDCR R0,0
+
+       BLWP @VWTS
+       DATA 920,DREDIT,40
+DRERR  MOV  R6,R0             GET DRIVE NUMBER
+       MPY  @DECTEN,R0
+                         MOV  R7,R0
+       A    @DNUMB,R0
+       A    @>4008,R1
+       DECT R1
+       LI   R2,1
+       BLWP @GETSTR
+       C    *R1,@SPACE
+       JNE  DRCHK
+       BL   @GDF9
+       BL   @GDUD
+DRCHK  CLR  R2                Make sure LSByte is >00
+       MOVB *R1+,R2           Get new drive number
+       AI   R2,->3000         Make it a hex byte
+       JEQ  DRERR             Is number under 1
+       JLT  DRERR             Yep, so must be an error
+       CI   R2,>2A00          Is number pass Z
+       JGT  DRERR             Yep, so must be an error
+       CI   R2,>1000          Is number within A-Z
+       JGT  DROK              OK! New number within A-Z!
+       CI   R2,>0900          Is number not within 1-9
+       JGT  DRERR             Yep, so must be an error
+DROK   MOVB R2,*R1+           OK! Store new drive number
+       BL   @GDF9
+       BL   @GDUD
+
+       BLWP @VWTS
+       DATA 920,DNEDIT,40
+       MOV  R7,R0             GET DISKNAME STRING
+       A    @DNAME,R0
+       LI   R1,>5800
+       LI   R2,10
+       BLWP @GETSTR
+       BL   @GDF9
+       BL   @GDUD
+
+       BLWP @VWTS
+       DATA 920,WPEDIT,40
+WP1    MOV  R7,R0             GET WRITE PROTECTION YES/NO
+       A    @WPO,R0
+       LI   R1,RESULT
+       LI   R2,1
+       BLWP @GETSTR
+       BL   @GDF9
+       CB   *R1,@Y
+       JNE  WP2
+       NEG  *R8
+       JMP  NXTDSK
+WP2    CB   *R1,@N
+       JNE  WP1
+       ABS  *R8
+       BL   @GDUD
+
+       SETO R4
+       BLWP @VWTS
+       DATA 920,F1EDIT,40	;reformat this ramdisk y/n  -- doesn't preserve! Not what one would expect
+; reformatting should use existing size. Very dangerous as it deletes ALL subsequent drives!
+;
+       MOV  @4(R8),R0
+       JNE  FORM1
+       CLR  R4
+       BLWP @VWTS
+       DATA 920,F2EDIT,40	;reformat/delete/no
+
+FORM1  MOV  R7,R0             GET FORMAT YES/NO
+       A    @FORMA,R0
+N      EQU  $+2
+Y      EQU  $+3
+       LI   R1,'NY'
+       BLWP @VSBW
+
+       LI   R1,RESULT
+       LI   R2,1
+       BLWP @GETSTR
+       BL   @GDF9
+       ABS  R4
+       JNE  FORM2
+       CB   *R1,@D
+;;       JEQ  DELDSK	;DELETE
+       JEQ  WARND1	; delete with warning!  1-25-2020
+
+;
+; 1-25-2020Change 'Y' to 'R' to match the prompt
+;  "format or delete this ramdisk? (F/N/D)
+;  
+; Format/Delete/Init?  (F/D/I/N)
+;
+; Format: Create new drive;delete all after
+; Init: erase drive using current size
+; Del : delete drive and all after
+;
+; Then--> 
+; WARNING: This will erase current and following drives!
+;
+
+FORM2  CB   *R1,@hex+>F   ;letter "F" from hex string - for FORMAT	
+;;       JEQ  SIZE1	;FORMAT
+       JEQ  WARNF1	;format with warning
+
+       CB   *R1,@N
+       JNE  FORM1
+       BL   @GDUD	;RETAIN; skip to next entry in list
+
+NXTDSK 
+       BLWP @VWTS		;clear warning
+       DATA 880,WCLEAR,40
+       MOV  @2(R8),R0         GOTO NEXT DISK IN CONFIG
+       JEQ  GD1A
+       CI   R6,10
+       JEQ  GD1A
+       INC  R6
+       AI   R7,80
+       C    *R8+,*R8+
+       MOV  *R8,*R8
+       JNE  GD1A
+       BL   @ADDUP
+       SRL  R2,2
+       A    R9,R2
+       MOV  R2,*R8
+GD1A   B    @GD1
+
+GDUD   CI   R3,>0A00          CHECK UP/DOWN KEYS
+       JEQ  NXTDSK            Go down!
+       CI   R3,>0B00
+       JNE  GDRT
+       CI   R6,1              Go up!
+       JEQ  GD1A
+       DEC  R6
+       AI   R7,-80
+       AI   R8,-4
+       JMP  GD1A
+
+GDF9   CI   R3,>0F00          CHECK ABORT KEYS
+       JEQ  EDEXIT
+GDRT   RT
+EDEXIT BL   @LS
+       B    @REDORO
+;
+; DELETE THE DISK - DISPLAY WARNING!
+;
+WARND1 BLWP @VWTS
+       DATA 880,FWARN1,80	;two lines
+
+       MOV  R7,R0             current row
+       A    @FORMA,R0		add offset
+       LI   R1,'NY'		re-write 'N'
+       BLWP @VSBW
+
+       LI   R1,RESULT
+       LI   R2,1
+       BLWP @GETSTR
+       BL   @GDF9
+
+WARND2 CB   *R1,@Y	
+       JEQ  DELDSK	;FORMAT confirmed
+       CB   *R1,@N	;not 'N' so keep checking
+       JNE  WARND1
+       BL   @GDUD	;RETAIN; skip to next entry in list
+       jmp  nxtdsk
+
+DELDSK CLR  *R8               DELETE THE LAST DISK IN CONFIG
+       B    @SCFG
+;
+; FORMAT/INITIALIZE!  DISPLAY WARNING!
+; 
+; 
+WARNF1 BLWP @VWTS
+       DATA 880,FWARN1,80	;two lines
+
+       MOV  R7,R0             current row
+       A    @FORMA,R0		add offset
+       LI   R1,'NY'		re-write 'N'
+       BLWP @VSBW
+
+       LI   R1,RESULT
+       LI   R2,1
+       BLWP @GETSTR
+       BL   @GDF9
+
+WARNF2 CB   *R1,@Y	
+       JEQ  SIZE1	;FORMAT confirmed
+       CB   *R1,@N	;not 'N' so keep checking
+       JNE  WARNF1
+       BL   @GDUD	;RETAIN; skip to next entry in list
+       jmp  nxtdsk
+
+ 
+SIZE1  BLWP @VWTS		;clear warning
+       DATA 880,WCLEAR,40
+
+       BLWP @VWTS
+       DATA 920,SZEDIT,40
+       BL   @ADDUP            GET SIZE OF DRIVE
+       MOV  @MSEC,R3
+       S    R2,R3
+       MOV  R3,@NUMBER
+       MOV  R3,@ASBIG
+* 3/21/2014:
+*      C    R3,@D3200         test remaining sectors
+*      JLE  SIZE1A            more than maximum allowed per disk ?
+*      MOV  @D3200,@NUMBER    Yes, so reset to maximum (3200)
+*-end
+*SIZE1A
+       BL   @CLRCNV           CONVERT AND DISPLAY
+       BLWP @BTOA
+       BLWP @VWTS
+*      DATA 956,RESULT,4      3/21
+       DATA 955,RESULT,5      one char to left, 5 char display
+
+       C    @ASBIG,@D3200     current unformatted sectors >3200?
+       JLE  SIZE1A            No
+       MOV  @D3200,@NUMBER    Yes, so only allow user 3200 max!
+       BL   @CLRCNV           reset the results
+       BLWP @BTOA             and convert to ascii
+
+SIZE1A MOV  R7,R0             screen position for this drive
+       A    @SIZE,R0          add ofset
+       LI   R1,RESULT         get result
+       LI   R2,4
+       BLWP @VMBW
+       BL   @GETNBS
+       BL   @GDF9
+       MOV  @NUMBER,R3
+       JEQ  SIZE1
+       C    R3,@ASBIG
+       JH   SIZE1
+
+D3200  EQU  $+2               used for testing maximum
+       CI   R3,3200      Above maximum allowed?
+       JH   SIZE1        yes, request user re-enter
+**     CI   R3,1600      1600 sectors?
+*      JH   SIZE1        original
+**     JH   SIZE32       3.3.2012
+       SRL  R3,3         one rack=2k=2048 bytes=8 sectors @ 256 byte/sector
+       SLA  R3,3         so partition maximum sectors/rack
+       C    R3,@NUMBER   equivalent?  (ie, user selected 2k boundary)?
+       JEQ  SIZE4        yes, move on
+       SRL  R3,3         no, so adjust. (Now-is it OK if this number exceeds
+       INC  R3           ASBIG?)  Or is that impossible w/2k (8k) boundaries?
+       SLA  R3,3
+
+*3.10: removed 3.3 code that SLR/SLA by 4 if >1600 sectors. Why? This routine
+*      is to normalize based on rack (2k) not density. Routine is adequate
+*      up to 8 sectors/AU
+
+SIZE4  MOV  R3,@NUMBER
+       BL   @CLRCNV
+       BLWP @BTOA
+       LI   R1,RESULT
+       BLWP @VMBW
+
+* Create sector 1. Name has already been populated
+* Rack for sector 0 visible @>5800
+FORMIT MOV  R3,@>580A         FORMAT THE NEW DRIVE
+       MOV  R8,R0             drive ptr?
+       INCT R0
+       MOV  R3,*R0
+       INCT R0
+       MOV  R6,R1
+FORMIV INC  R1
+       CI   R1,10
+       JH   FORMIU
+       CLR  *R0+         clearing 40 bytes?
+       CLR  *R0+
+       JMP  FORMIV
+
+FORMIU LI   R0,FORMTB    >0944,>534B,>2028,>0202,>0300
+       CI   R3,1600      single?
+       JLE  FORMPP       yes
+       LI   R0,FORMQD    Assume quad
+       SRL  R3,1         and adjust bitmap to 2 sectors/AU
+*
+* 3.10.2012
+* drives>>3200 sectors would require extensive changes
+* to cluster computations. Available ROS space does not permit
+* us to take this path at this time. 
+*
+*      CI   R3,>xxx      must account for shift in sector limit!!
+*      JLE  FORMPP
+*      LI   R0,FORMHD    Yes. High Density (6400 max)
+*      SRL  R3,1         adjust bitmap to 4 sectors/AU
+*      CI   R3,>xxxx     more than high?
+*      JLE  FORMPP       no
+*      LI   R0,FORMUH    Yes, ultra high density (12800 max)
+*      SRL  R3,1         adjust bitmap to 8 sectors/AU
+
+FORMPP LI   R1,>580C
+       MOV  *R0+,*R1+    sec/track | "D"
+       MOV  *R0+,*R1+    "S"       | "K"
+       MOV  *R0+,*R1+    Reserve   | tracks/side (40/80)
+       MOV  *R0+,*R1+    #sides    | density (2=double,3=quad)
+       LI   R2,512->14
+CLRFRM CLR  *R1+         Clear sectors 0/1 following disk name and VIB info
+       DECT R2
+       JNE  CLRFRM
+       MOV  *R0,@>5838   Set bitmap
+       SRL  R3,3         Divide for bit per sector (QD/HD adjusted earlier)
+       AI   R3,>5838     Add to start of bitmap and mark as UNAVAILABLE
+
+BUILD1 CI   R3,>5900     reach end of bitmap?
+       JEQ  BUILD2       Yes
+       MOVB @FF,*R3+     No, flag as used (outside range of requested sectors)
+       JMP  BUILD1
+BUILD2 B    @SCFG
+
+FORMQD DATA >1244,>534B,>2050,>0203,>0100   QUAD 3200
+* FORMHD DATA >2444,>534B,>2050,>0203,>0100  High Density 6400 max
+* >0100 reserves one AU (2 or 4 sectors) in the bitmap routine
+
+LS     LI   R0,9              CHECK/CLEAR TABLES
+       MOV  @DNTBL,R1		;^drive table
+       MOV  R9,R2
+       MOV  @>4008,R3
+       AI   R3,8
+       NEG  R2
+       C    *R1,R9
+       JEQ  LS1
+       C    *R1,R2
+       JEQ  LS1
+       MOV  R9,*R1
+       CLR  @4(R1)
+
+LS1    C    *R1+,*R1+
+       AI   R3,10
+       MOV  *R1,R2
+       JEQ  LS2
+       MOV  @2(R1),R2
+       JEQ  LS2
+       DEC  R0
+       JNE  LS1
+       RT
+
+LS2    CLR  *R1+	
+       CLR  *R1+
+       MOV  @SPACE,*R3	
+       AI   R3,10
+       DEC  R0
+       JNE  LS2
+       RT
+;
+; calculate total formatted sectors so far
+; stop when we reach beyond current formatted drives (R6)? 
+;
+
+ADDUP  LI   R0,1              ADD UP TOTAL USED SO FAR
+       CLR  R2
+       MOV  @DNTBL,R1
+       INCT R1
+ADD1   C    R0,R6
+       JHE  ADD2
+       A    *R1,R2
+       C    *R1+,*R1+
+       INC  R0
+       JMP  ADD1
+ADD2   RT
+
+*****************
+* SAVE THE ROS8 *
+*****************
+SV     LI   R3,>0600
+       MOV  R3,@RUNPAB
+       LDCR R10,0             Switch in first rack
+       BLWP @VWTS             Write to VDP
+       DATA >1000,>4000,>2000
+       BL   @GODSR
+       DATA SVPT,FNAME
+       B    @REDORO		;jmp out of range now
+
+*****************
+* LOAD THE ROS8 *
+*****************
+LD     CLR  R5		; FLAG 0=saved disk info; 1=
+       ABS  @VALID		is there a valid ros loade?
+       JEQ  SAVD3		no, so don't ask to preserve info
+
+       BLWP @VWTS
+       DATA 920,SAVDSK,40
+       LI   R0,959
+       LI   R1,SAVDSK+39
+       LI   R2,1
+       BLWP @GETSTR
+       CI   R3,>0F00
+       JNE  LDX11
+       B    @REDORO	;jump out of range
+
+
+;LDX11  CI   R3,>4E00     n	no, don't save. Skip all of this
+;       JEQ  SAVD3
+;       CI   R3,>5900     y
+;       JNE  LD
+
+; modified to allow for confirmation 2-23
+LDX11  CI   R3,>5900	;yes, save
+       JEQ  LDXYES
+       CI   R3,>4E00    ;no, don't save. Confirm selection.
+       JNE  LD		keep checking for y/n
+
+
+;;-----2-23-2020; CONFIRM the user doesn't want to save disk info!
+
+LDC1   CLR  R5		;0=not saved
+       BLWP @VWTS
+       DATA 920,SAVDSKCONFIRM,40   (C)onfirm or F9 to abort
+       LI   R0,959
+       LI   R1,SAVDSKCONFIRM+39	;flash cursor on the C
+       LI   R2,1
+       BLWP @GETSTR
+       CI   R3,>0F00
+       JNE  LDX22
+       B    @REDORO	;jump out of range - Abort!
+LDX22  CI   R3,'C'*256  ; Confirm?
+       JEQ  SAVD3	; yup. don't save the info. 
+       JMP  LDC1        ; only allow Confirm or F9
+
+;YES, save drive info (and now CALL/color/powerup)
+
+LDXYES   LDCR R10,0	; MAKE SURE DSR IS VISIBLE
+
+; Here is where we SAVE the drive pointers. 
+;
+; 4008: pointer to DSR device table
+;       offset +8 is the ascii representation of drive | unit#
+; Buffer: 80 character buffer in CFG-s
+;
+; Expand buffer size (done)
+
+       MOV  @DNTBL,R1    GET POINTER TO DRIVES
+       LI   R0,10        COUNTER TO MOVE
+       LI   R2,BUFFER
+       MOV  @>4008,R3
+SAVD5  AI   R3,8
+       MOV  *R3+,*R2+
+       MOV  *R1+,*R2+    GET DATA
+       MOV  *R1+,*R2+
+       DEC  R0
+       JNE  SAVD5        NOT DONE THEN GET NEXT
+       SETO R5           ;FLAG<>0, show disk info saved
+
+;----------------------------------------------------------
+; 2-9-2020
+; Also save CALL table, colors, and powerup on/off
+; There are 9 calls each requiring 10 bytes: 2x2 pointers, 1-len, 5-byte name
+;
+; CALL1  DATA CALL2,LDPGM                 CALL #1   (AUTO-START)
+;       BYTE 4,'M','E','N','U',' '
+
+        li   r0,9		;9 CALLs to save
+        mov  @>400A,R1		;get pointer to CALL1 call list
+savc55  mov  *r1+,*r2+		;move 10 bytes per iteration
+	mov  *r1+,*r2+
+	mov  *r1+,*r2+
+	mov  *r1+,*r2+
+	mov  *r1+,*r2+
+	DEC  r0
+	jne  savc55
+
+; now save color
+
+	mov  @>4016,*r2+	;color
+
+; now save powerup
+; The next few lines extract the powerup flag
+; -Get CALL1 pointer address
+; -Get address of call1
+; -subtract 6 to point to PWRNXT
+; -save the flag/address
+;
+;;       LI   R1,>400A		;get CALL1 pointer
+;;       MOV  *R1,R1		;get address
+;;       AI   R1,-6		;back up to PWRNXT (flag for powerup)
+;;;       MOV  R1,*r2+		;and save it
+;;       MOV  *R1,*r2+		;and save it 3-21; was saving address not value!
+;
+; 3-27-2020 Above routine was saving wrong information
+; 	    Let's do it right...
+;
+	li  r1,>4004	;get powerup
+	mov *r1,r1	;get address  (>36)
+	mov *r1,*r2+	;is value here a 0 or address for 2nd powerup link?  (0 off; <>0 on)
+
+SAVD3  LI   R3,>0500
+       MOV  R3,@RUNPAB   set up pab for a load
+       BL   @GODSR
+       DATA LDPT,FNAME
+
+       LI   R0,>1000     GET DSR HEADER OF FILE LOADED
+       LI   R1,RESULT
+       LI   R2,2
+       BLWP @VMBR
+       C    *R1,@DSRHDR		;got dsr header in this file?
+       JEQ  DOCRCL		;yes, proceed with CRC	
+       B    @BROKEN		;NO, this isn't a valid ROS file
+
+DOCRCL BL   @CRCUP            7.5.2015 - Calculate the CRC (no RT / Direct B)
+
+GOODCR LDCR R10,0        Switch in last rack
+       LI   R0,>1000
+       LI   R1,>4000
+       LI   R2,>2000
+       BLWP @VMBR        Move loaded 8k into DSR space
+;
+       CLR  @>4006       7.6.2015 Be sure to clear CRC once loaded into DSR space!
+;
+; This sets ROS up to use >0001 (16 bit) or >0700 (8 bit)
+; i.e., ROS value at >4014 is NOT static and is set by CFG ! ! !
+
+       MOV  R10,@>4014 	
+       MOVB R10,R10	
+       JEQ  LOAD5
+       MOV  R10,@DSR8ON
+LOAD5  MOV  @NOUSER,@>402E
+       MOV  @NOUSER,@>403C
+       MOV  @NOUSER,@>403E
+       ABS  R5
+       JEQ  LOAD6
+
+; RESTORE drive information if the load was a success
+; ((Would be nice to load the options from a separate file some day))
+;
+; 10 bytes per drive * 6 bytes = 60 bytes
+
+       MOV  @>400A,R1         GET POINTER TO CALLS
+       AI   R1,-46            POINT TO START OF TABLE
+       LI   R0,10             COUNTER TO MOVE
+       LI   R2,BUFFER
+       MOV  @>4008,R3
+SAVD6  AI   R3,8
+       MOV  *R2+,*R3+
+       MOV  *R2+,*R1+         GET DATA
+       MOV  *R2+,*R1+
+       DEC  R0
+       JNE  SAVD6             NOT DONE THEN GET NEXT
+;
+;2.9.2002 Let's also restore CALL/color/powerup flag
+;         Who doesn't hate re-entering that just to restore ROS? 
+;
+; 10 bytes per call * 9 = 90 bytes
+;
+        li   r0,9		;9 CALLs to save
+        mov  @>400A,R1		;get pointer to CALL1 call list
+savd55  mov  *r2+,*r1+		;move 10 bytes per iteration
+	mov  *r2+,*r1+
+	mov  *r2+,*r1+
+	mov  *r2+,*r1+
+	mov  *r2+,*r1+
+	DEC  r0
+	jne  savd55		;yattfu, don't copy/paste loop labels then forget to change
+;
+; restore color (2 bytes)
+;
+	mov  *r2+,@>4016	;color
+;;;
+;;; restore powerup (2 bytes)
+;;;
+;;       LI   R1,>400A		;get CALL1 pointer
+;;       MOV  *R1,R1		;get address
+;;       AI   R1,-6		;back up to PWRNXT (flag for powerup)
+;;;      MOV  *r2+,R1
+;;       MOV  *r2+,*R1		;and save it ;3-21 was restoring address not value!
+
+;
+; 3-27-2020  Above routine was incorrect for powerup flag
+;
+; get the powerup address from NEW ROS
+	li	r1,>400a	;get the location for powerup with current ROS
+	mov	*r1,r1		;get adddress for CALL1
+	ai	r1,-6		;back up to PWRNXT
+	mov	r1,@pwradr	;and save the ADDRESS of this 2nd powerup link (not the value)
+
+; prepare R1 to turn off/on
+	li   r1,>4004		;get new ROS powerup address
+	mov  *r1,r1		;from >4004 (PWRUP)
+
+; R2 is our buffer
+        clr  *r1		;clear it by default
+	mov  *r2+,r0		;get saved value fron old ROS and test it
+	jeq  powercont		;0, jump over restoration of powerup
+	mov  @pwradr,*r1	;<>0, so restore this secondary powerup
+
+;
+; ROS is in place, restoration complete, now perform a powerup
+;
+powercont
+LOAD6  MOV  R12,@GPLWS+24     Store CRU ADDR. in GPL R12
+       LWPI GPLWS             Load GPL workspace
+       MOV  @>4004,R2         Get address of POWER-UP LINK
+       MOV  @2(R2),R9         Get address of POWER-UP PROG
+       BL   *R9               EXECUTE THE INIT POWER-UP
+       NOP                    Just incase of ERROR
+       LWPI WS                Load our workspace back
+
+REDORO SBZ  0            Card off
+       AI   R13,-4       Decrement both CRUBAS and HEXBAS
+       CI   R13,TABLE    so that the next FIND after CONFIG
+       JHE  RERUN        will be this card.
+       LI   R13,TABLE
+RERUN  B    @CONFIG      re-run the program.
+
+***********************
+* SETUP/EXECUTE A DSR *
+***********************
+GODSR  MOV  *R11+,@GODSR0+2
+       MOV  *R11,@GODSR1+2
+       BLWP @VWTS
+GODSR0 DATA 920,>0000,40
+       LI   R0,935
+       MOV  *R11+,R1
+       LI   R2,25
+       BLWP @VMBW
+       BLWP @GETSTR
+       CI   R3,>0F00
+       JEQ  GODSR2
+       LI   R3,>2000
+       LI   R2,24
+GODSR1 CB   R3,@>0000(R2)
+       JNE  GODSR3
+       DEC  R2
+       JNE  GODSR1
+GODSR2 B    @REDORO
+GODSR3 LI   R0,>0F80
+       INC  R2
+       MOV  R2,@-2(R1)
+       AI   R1,-10
+       AI   R2,10
+       BLWP @VMBW
+REDSR  CLR  R0
+       LDCR R0,0         NOT SURE what this is doing ?
+       LI   R6,>0F89
+       MOV  R6,@>8356
+       BLWP @DSRLNK
+       DATA 8
+       JNE  GODSRT
+BROKEN BLWP @VWTS
+       DATA 920,ERR,40
+BRKCRC CLR  R2
+       BLWP @GETSTR
+       JMP  GODSR2
+GODSRT RT
+
+*******************************************
+; 7/5/2015
+; CRCUP: CRC Test. Validates ROS CRC against embedded value offset >8
+;        Destroys R0,R1,R2 and returns CRC in R2
+;        Skips header and last 4 bytes of ROS
+;
+
+CRCVAL DATA 0                 embedded CRC value from ROS
+CRCUP  LI   R0,>1000+6   CRC loc
+       LI   R1,CRCVAL    store it here
+       BLWP @VMBR        for comparison (and to set up VDP RA)
+
+       INCT R0  (>1000+6+2)  Start at byte after CRC
+       CLR  R2           CRC starts at 0
+
+CRC11  MOVB @>8800,R1
+*CRCUP movb *r0+,r1      THE VDP READ PUTS IT INTO R1 ALREADY
+       ANDI R1,>FF00
+       XOR  R1,R2
+       MOV  R2,R1
+       SRL  R1,4
+       XOR  R2,R1
+       ANDI R1,>FF00
+       SRL  R1,4
+       XOR  R1,R2
+       SRC  R1,7
+       XOR  R1,R2
+       SWPB R2
+
+       INC  R0
+       CI   R0,>1000+8188     end of ROS?
+       JNE  CRC11             no, read next byte and calculate
+* Compare CRC
+
+; WARNING: bytes 0-5 and 8188-8191 excluded from CRC
+
+       C    R2,@CRCVAL        does embedded CRC match computed?
+       JEQ  GOOD2             Yes. Load ROS.
+       MOV  @CRCVAL,R2        If it didn't match, was embedded value 0?
+       JEQ  GOOD1             assume good for now
+BADCR  BLWP @VWTS
+       DATA 920,BADCRC,40     Display BAD CRC and await keypress
+       B    @BRKCRC           Fail.
+
+; display crc condition
+good1  blwp @vwts
+       data 920,nullcrc,40	;no crc
+       jmp  good3
+GOOD2  blwp @vwts
+       data 920,goodcrc,40	;good crc
+good3  clr  r2
+       blwp @getstr
+       B    @GOODCR
+
+*************************************
+* LOAD AN USER DSR RORG OBJECT FILE *
+*                                   *
+* R3 = POINTER TO BUFFER CHAR       *
+* R4 = CURRENT ADDRESS REGISTER     *
+* R5 = RETURN INTEGER FROM STRING   *
+* R6 = PAB NAME LENGTH BYTE         *
+*************************************
+RORG   BL   @GODSR            Setup and Execute the DSR
+       DATA USERLN,RORGN
+       LI   R1,>0200          Switch to READ mode of files
+       LI   R0,>0F80          Pointer to OPCODE in VDP PAB
+       BLWP @VSBW             Write READ opcode to VDP PAB
+       LDCR R15,0
+       MOV  @NOUSER,@>402E
+       MOV  @NOUSER,@>403C
+       MOV  @NOUSER,@>403E
+       LI   R4,BO$END         FIRST FREE ADDRESS IN DSR MEMORY
+RORG1  CLR  *R4+
+       CI   R4,>6000
+       JL   RORG1
+*
+* GET THE NEXT RECORD
+*
+LOOP   BL   @REDSR            READ THE NEXT RECORD
+       LI   R0,>1000          No ERROR, so point to VDP BUFFER
+       LI   R1,BUFFER         Point to CPU BUFFER
+       LI   R2,80             Max. length of the RECORD
+       BLWP @VMBR             Place the RECORD into the CPU BUFFER
+       LDCR R15,0             Bring up the RAMBO DSR memory
+       MOV  R1,R3             Start at CHAR #0 in the record
+       CB   *R3,@COLON        Check if at the END OF FILE
+       JNE  ENTER             Nope, so enter this RECORD
+       LI   R11,REDORO        EXIT AFTER 'REDSR' TO NO ERROR CODE
+BDLD1  LI   R1,>0100          DONE: Switch to CLOSE mode
+       LI   R0,>0F80          Pointer to  OPCODE in VDP PAB
+       BLWP @VSBW             Write CLOSE opcode to VDP PAB
+       B    @REDSR            CLOSE THE FILE & Exit with/out error!!
+BDLD   LI   R11,BROKEN        EXIT AFTER 'REDSR' TO ERROR DISPLAY
+       JMP  BDLD1             Jump back up and close the file
+*
+* GET THE NEXT TAG CHARACTER
+*
+ENTER  MOVB *R3+,R2           Get the next TAG character
+       SRL  R2,8              Make it a WORD
+       CI   R2,>3A            Check if NUMERIC
+       JL   ENTER1            Yep, so skip over offset correction
+       AI   R2,-7             ALPHA, so remove offset from it
+ENTER1 ANDI R2,>000F          Put it within the range of 0 - 15
+       SLA  R2,1              Calc offset within TAG TABLE
+       MOV  @TAGTBL(R2),R11   Get the BRANCH TO ADDRESS
+       RT                     EXECUTE THE TAG
+*
+* SEARCH THE REF/DEF TABLE
+*
+SRHTBL LI   R1,REFDEF-6       Point to minus 1 in table
+SRTBL1 AI   R1,6              Point to the next entry
+       MOV  *R1+,R7           Get address for this name
+       JEQ  BDLD              If ZERO then NOT FOUND
+       MOV  R3,R0             Save pointer to object name
+       MOV  R1,R8             Save pointer to table name
+       LI   R2,6              Max. length of REF/DEF name
+SRTBL2 CB   *R8+,*R0+         Compar a byte of the name
+       JNE  SRTBL1            Not matched, so check next entry
+       DEC  R2                Matched, so check if finished
+       JNE  SRTBL2            Nope, so compar some more
+       MOV  R0,R3             Yep, move pointer to after name
+       RT                     RETURN WITH ADDRESS IN R7
+*
+* 0 LOAD PRG IDENTIFICATION
+*
+LDIDT  BL   @CONVT            Convert the length field
+       MOV  R5,R5             Check if is an AORG type OBJECT
+       JEQ  BDLD              Yep, so exit with ERROR message
+       CI   R5,>6000-BO$END   Check if not enough free memory
+       JH   BDLD              Yep, so exit with ERROR message
+       CLR  R1                Start at the first BYTE in USRIDT
+LDIDT1 CB   *R3,@DOT          Check if at the END OF DSR NAME
+       JEQ  LDIDT2            Yep, so calc the length
+       CB   *R3,@SPACE        Check if at the END OF DSR NAME
+       JEQ  LDIDT2            Yep, so calc the length
+       MOVB *R3+,@>4025(R1)   Put a BYTE into the memory
+       INC  R1                Point to the next BYTE in memory
+       CI   R1,8              Check if at the END OF DSR NAME
+       JL   LDIDT1            Nope, so get the next BYTE of USRIDT
+LDIDT2 SWPB R1                Put length in the  MSByte
+       MOVB R1,@>4024         Store the length byte into memory
+       SWPB R1                Put length back in LSByte
+LDIDT3 CI   R1,8              Check if DSR NAME is at max. length
+       JHE  TAGEND            Yep, so start entering the PROGRAM
+       MOVB *R3+,@>4025(R1)   Put a BYTE into the memory
+       INC  R1                Point to the next BYTE in memory
+       JMP  LDIDT3            Jump back up and check if finished
+*
+* 3 & 4 LOAD EXTERNAL REFERENCE
+*
+REXREF BL   @CONVT            Get last used location of RORG REF
+       AI   R5,BO$END         Add RORG address offset
+       JMP  EXREF0            Jump to common part of EXT REF
+AEXREF BL   @CONVT            Get last used location of AORG REF
+EXREF0 BL   @SRHTBL           Check if the REF is in the table
+EXREF1 MOV  R5,R1             Any more REF's to this name
+       JEQ  TAGEND            Nope, so this TAG is finished
+       MOV  *R1,R5            Yep, so save next address pointer
+       MOV  R7,*R1            Place the correct address into memory
+       JMP  EXREF1            Jump back up and check if finished
+*
+* 5 & 6 LOAD EXTERNAL DEFINITION
+*
+REXDEF BL   @CONVT            Get address of the RORG DEF
+       AI   R5,BO$END         Add RORG address offset
+       JMP  EXDEF0            Jump to common part of EXT REF
+AEXDEF BL   @CONVT            Get address of the AORG DEF
+EXDEF0 BL   @SRHTBL           Check if the DEF is in the table
+       MOV  R5,*R7            Yep, so store the branch to addr.
+TAGEND B    @ENTER            Done with this TAG, so get next TAG
+*
+* 9 & A LOAD THE ADDRESS COUNTER
+*
+RLADR  BL   @CONVT            Get new RORG address counter
+       AI   R5,BO$END         Add RORG address offset
+       JMP  LLADR             Jump to common part of LOAD ADDR.
+ALADR  BL   @CONVT            Get new AORG address counter
+LLADR  CI   R5,>4000          Check if new address outside DSR
+       JL   ADRBAD            Yep, so exit to error display
+       CI   R5,>6800          Check if new address outside DSR
+       JHE  ADRBAD            Yep, so exit to error display
+       MOV  R5,R4             Nope, so change the address counter
+       JMP  TAGEND            Done with this TAG, so get next TAG
+*
+* B & C LOAD THE NEXT DATA WORD
+*
+RDATA  BL   @CONVT            Get the next RORG DATA word
+       AI   R5,BO$END         Add RORG address offset
+       JMP  LDATA             Jump to common part of LOAD DATA
+ADATA  BL   @CONVT            Get the next AORG DATA word
+LDATA  MOV  R5,*R4+           Store the DATA into the DSR memory
+       CI   R4,>6800          Check if address now outside DSR
+       JL   TAGEND            Nope, so we are done with this TAG
+ADRBAD B    @BDLD             ERROR: Address outside DSR space!
+
+***************************************
+* CONVERT A STRING FROM BUFFER TO HEX *
+***************************************
+CONVT  LI   R1,4              Number of BYTEs to converted
+       CLR  R5                Clear RETURN value
+CVLP0  SLA  R5,4              Shift RETURN value for next BYTE
+       MOVB *R3+,R2           Get the next BYTE to be converted
+       SRL  R2,8              Make it a WORD
+       CI   R2,>3A            Check if NUMERIC
+       JL   CVLP1             Yep, so skip over offset correction
+       AI   R2,-7             ALPHA, so remove offset from it
+CVLP1  ANDI R2,>000F          Put it within the range of 0 - 15
+       A    R2,R5             Add it to last RETURN value
+       DEC  R1                Check if finished
+       JNE  CVLP0             Nope, so convert the next BYTE
+CVEND  RT                     Done, so exit with answer in R5
+;end
