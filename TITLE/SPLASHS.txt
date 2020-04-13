@@ -1,0 +1,421 @@
+; SPLASHS (TITLE) simple splashscreen for Horizon Ramdisk
+; 
+; 2020 InsaneMultitasker
+; 
+; Support routines used from slideshow by OPA for ROS compatibility
+; 
+; Loads TITLE_C and TITLE_P, displays, and counts down.
+; User may press SPACE to abort
+; MENU is loaded via CALL at end
+; 
+; Place TITLE in first CALL slot;  MENU in second CALL slot.
+;
+; Future possibilities:
+; - RANDOM display TITLE1_ to TITLE9_ for those who get bored of the same pic
+;
+; 4.11.2020
+; - Added <spacebar> check before file load to kill TITLE more quickly
+; - moved the delay (in seconds) to bytes 4-5 (10-11 w/header) for easy editing later
+; - VDPSAV label EQU now to reduce program size by >300 (3 sectors)
+; - Consider moving PAB to >1800 to avoid disk buffer overlap w/TI,CC,BwG
+;
+;
+       TITL 'TITLE'   ;recycle some code from SHOWS
+       DEF  SFIRST,SLAST      Used by RAG linker to make PROGRAM
+
+        AORG >C000		; ROS loads routines for dsr in memory >a050
+
+; startup
+SFIRST LIMI 0                 Turn off all interrupts
+       jmp  nodme
+
+; user may sector edit LSByte
+delays data >0005		;5 seconds, easier for user to find
+
+NODME  LWPI SHOWWS            Select our own workspace
+
+       LI   R0,>01B0          Turn off display screen
+       BLWP @VWTR             Write >B0 to  VDP R1
+       MOVB @SHOWWS+1,@VDPR1  Tell ROM what VDP R1 is set to
+       INC  @AUTOFF           Make sure screen never blanks
+       CLR  @USRINT           Make sure no user interrupt
+;;       SETO @INTCTL           Make sure no QUIT, SOUND, ETC.
+
+; 4.11.2020, don't load picture if user is holding spacebar at startup
+        limi 0
+        movb @five,@>8374 ;;clr @>83e0	; yattfu, must set gplws R0 for keyscan keyboard number. sigh.
+	blwp @kscan		scan
+	cb   @keyval,@space	space?
+	jne  keepgoing		yes, exit otherwise..
+        b    @gotomenu
+
+; set up the patterns 0-255 for each of the three
+; screen segments
+;
+; VDP >1800-1AFF
+;
+keepgoing
+	li	r0,>1800
+	clr	r1
+	li	r2,767		768-1
+	blwp	@vsbw		set address and write 1 byte 
+	ai      r1,256
+;
+shwgo1	movb r1,@vdpwd		now fast write the rest
+	inc	r0
+	ai	r1,256
+	dec	r2
+	jne	shwgo1
+
+
+; save vdp in disk buffer area for TI, CC, etc
+; extend beyond >3800 in case we need to use >3800-38ff
+;
+	li	r0,>3600
+	li	r1,vdpsav
+	li	r2,>0300
+	blwp    @vmbr	
+
+; Set VDP registers. Note, sprites >> >3800
+       BL  @SETVDP
+
+; Try to load TITLE_P and TITLE_C
+; If either is not found, we abort the load
+; and attempt to launch MENU
+;
+
+; load _P file first
+	clr  r0			;set buffer in pab
+	mov  r0,@artbuf
+
+       li   r0,>1B00
+;       LI   R0,>3800          VDP address for LOAD PAB
+       LI   R1,ARTPAB         CPU address of LOAD PAB
+       LI   R2,35             Length of LOAD PAB
+       BLWP @VMBW             Write LOAD PAB to VDP RAM
+       AI   R0,9              Point to the length byte
+       MOV  R0,@POINTR        Point to the VDP PAB length byte
+       BLWP @DSRLNK           Load the TI-ARTIST _P file
+       DATA 8                 A DSR device link
+       jeq getout
+
+; now attempt to load _C file
+
+        li   r0,>1B00
+;      LI   R0,>3800          VDP address for LOAD PAB
+       LI   R1,ARTPABc        CPU address of LOAD PAB
+       LI   R2,35             Length of LOAD PAB
+       BLWP @VMBW             Write LOAD PAB to VDP RAM
+       AI   R0,9              Point to the length byte
+       MOV  R0,@POINTR        Point to the VDP PAB length byte
+       BLWP @DSRLNK           Load the TI-ARTIST _P file
+       DATA 8                 A DSR device link
+       jeq getout
+
+       LI   R0,>01E0          Turn on BITMAP screen display
+       BLWP @VWTR             Write >E0 to  VDP R1
+       MOVB @SHOWWS+1,@VDPR1  Tell ROM what VDP R1 is set to
+
+;
+; timeout or keypress to exit the title
+;
+	LI R5,TIMER	;vdp timer
+        mov     @delays,r0
+;	li	r0,5	;5 seconds
+	sla	r0,5	; *16 (*30 is better but we are dealing with kscan in the loop)
+
+FSTNXT CLR  *R5               Clear VDP timer
+FSTSEC limi 1		                 Turn on VDP timer
+       CB   *R5,@SECOND       Check if a second is up!
+       JL   FSTSEC            Nope, so wait some more
+
+       LIMI 0                 Turn off VDP timer
+
+       movb @five,@>8374 ;;clr @>83e0	; yattfu, must set gplws R0 for keyscan keyboard number. sigh.
+       blwp @kscan		scan
+       cb   @keyval,@space	space?
+       jeq  getout		yes, exit otherwise..
+
+       DEC  R0                Check if delay is finished
+       JNE  FSTNXT            Nope, so wait for another second!
+
+;-----------------
+; turn screen off temporarily
+; instead of forcing MENU we should probably look up the CALL
+; table, find the proper CALL in slot 1 and proceed.  Not sure how we
+; find the first menu.  We can't call the powerup again as that would
+; display the SHOW program. hah. 
+;
+
+getout  LI   R0,>01B0          Turn off display screen
+        BLWP @VWTR             Write >B0 to  VDP R1
+        MOVB @SHOWWS+1,@VDPR1  Tell ROM what VDP R1 is set to
+
+	li	r0,>3600
+	li	r1,vdpsav
+	li	r2,>0300
+	blwp    @vmbw	      ;4.11.2020 restore vdp in disk buffer area
+
+; PAB >3000 is arbitrary; doesn't really matter at this point
+gotomenu
+       LI   R0,>3000          VDP address for LOAD PAB
+       LI   R1,callpab        CPU address of LOAD PAB
+       LI   R2,35             Length of LOAD PAB
+       BLWP @VMBW             Write LOAD PAB to VDP RAM
+       AI   R0,9              Point to the length byte
+       MOV  R0,@POINTR        Point to the VDP PAB length byte
+       BLWP @DSRLNK           Load the TI-ARTIST _P file
+       DATA 8                 A DSR device link
+;       JEQ  DSRERR            If errors, exit to error program
+
+exit2
+DSRERR	BLWP @0
+
+;
+; SETUP VDP
+;
+
+SETVDP LIMI 0                 Turn off all interrupts
+       LI   R0,>0002          Setup VDP 12K Bitmap mode
+       BLWP @VWTR             Write >02 to  VDP R0
+;       LI   R0,>01A0          Turn off the display screen
+;       BLWP @VWTR             Write >A0 to  VDP R1
+;       MOVB @SHOWWS+1,@VDPR1  Tell ROM what VDP R1 is set to
+
+       LI   R0,>0206          Name table at VDP >1800
+       BLWP @VWTR             Write >06 to  VDP R2
+       LI   R0,>03FF          Color table at VDP >2000
+       BLWP @VWTR             Write >FF to  VDP R3
+
+       LI   R0,>0403          Image table at VDP >0000
+       BLWP @VWTR             Write >04 to  VDP R4
+
+; 4-13-2020
+; FYI, Don't use sprites without CALL FILES(1) or saving VDP
+; as that could destroy Disk buffers
+       LI   R0,>0576          Sprite Attribute table at VDP >3B00
+       BLWP @VWTR             Write >76 to  VDP R5
+
+       LI   R0,>0607          Sprite Pattern table at VDP >3800
+       BLWP @VWTR             Write >07 to  VDP R6
+
+       LI   R0,>0701          Set text colors to transparent on BLACK
+       BLWP @VWTR             Write >17 to  VDP R7
+       RT
+
+	
+
+**********************************
+* VSBR,VSBW,VMBR,VMBW,VWTR,KSCAN * 
+**********************************
+* Normal E/A type support utilities (from OPA)
+*
+KSCAN  DATA UTILWS,KSCAN1     Key SCAN BLWP vectors
+KSCAN1 LWPI GPLWS             Load GPL workspace
+       MOV  R11,@KSCAN2+2     Save R11 into >0000 below
+       BL   @>000E            Branch to console keyboard scan program
+KSCAN2 LI   R11,>0000         Restore GPL return address
+       LWPI UTILWS            Load back the BLWP workspace
+       RTWP                   RETURN TO THE CALLING PROGRAM
+
+VSBR   DATA UTILWS,VSBR1      Video Single Byte Read BLWP vectors
+VSBR1  BL   @VDPSRA
+       MOVB @VDPRD,@2(R13)
+       RTWP
+
+VSBW   DATA UTILWS,VSBW1      Video Single Byte Write BLWP vectors
+VSBW1  BL   @VDPSWA
+       MOVB R1,@VDPWD
+       RTWP
+
+VMBR   DATA UTILWS,VMBR1      Video Multi Byte Read BLWP vectors
+VMBR1  BL   @VDPSRA
+VMBR2  MOVB @VDPRD,*R1+
+       DEC  R2
+       JNE  VMBR2
+       RTWP
+
+VMBW   DATA UTILWS,VMBW1      Video Multi Byte Write BLWP vectors
+VMBW1  BL   @VDPSWA
+VMBW2  MOVB *R1+,@VDPWD
+       DEC  R2
+       JNE  VMBW2
+       RTWP
+
+VWTR   DATA UTILWS,VWTR1      Video Write To Register BLWP vectors
+VWTR1  BL   @VDPSWR
+       RTWP
+
+VDPSWR MOV  *R13,R0           USE ONLY BY VIDEO BLWP'S
+       ORI  R0,>8000
+       JMP  VDPGO
+VDPSWA MOV  *R13,R0
+VDPSTW ORI  R0,>4000
+       JMP  VDPGO
+VDPSRA MOV  *R13,R0
+VDPGO  MOVB @UTILWS+1,@VDPWA
+       MOVB R0,@VDPWA
+       MOV  @2(R13),R1
+       MOV  @4(R13),R2
+       RT
+
+***************************************
+* Any DSRLNK can be used here instead * Changed to start scan from CRU
+*************************************** >1200 to >1F00 and then from
+DSRLNK DATA DSRWS,DSR1                  >1000 to >1100. This allows
+DSR1   MOV  *R14+,R5                    all Horizons to be scaned in-
+       SZCB @SPACE,R15                  case the drive number is higher
+       MOV  @POINTR,R0                  then 3 and the Horizon CRU is
+       MOV  R0,R9                       higher then >1100. This is only
+       AI   R9,-8                       needed for users of the TI DISK
+       BLWP @VSBR                       CONTROLLER CARD.
+       MOVB R1,R3
+       SRL  R3,8
+       SETO R4
+       LI   R2,NAMBUF
+DLOOP1 INC  R0
+       INC  R4
+       C    R4,R3
+       JEQ  DJUMP1
+       BLWP @VSBR
+       MOVB R1,*R2+
+       CB   R1,@PERIOD
+       JNE  DLOOP1
+DJUMP1 MOV  R4,R4
+       JEQ  DJUMP6
+       CI   R4,7
+       JGT  DJUMP6
+       CLR  @CRULST
+       MOV  R4,@SCLEN
+       INC  R4
+       A    R4,@POINTR
+       LWPI GPLWS
+       CLR  R1
+       LI   R12,>1200
+       JMP  DJMP2A
+DLOOP2 MOV  R12,R12
+       JEQ  DJUMP2
+       SBZ  0
+DJUMP2 AI   R12,>100
+       CLR  @CRULST
+       CI   R12,>1200
+       JEQ  DJUMP5
+       CI   R12,>2000
+       JNE  DJMP2A
+       LI   R12,>1000
+DJMP2A MOV  R12,@CRULST
+       SBO  0
+       LI   R2,>4000
+       CB   *R2,@HEXAA
+       JNE  DLOOP2
+       A    @5*2+DSRWS,R2
+       JMP  DJUMP3
+DLOOP3 MOV  @SADDR,R2
+       SBO  0
+DJUMP3 MOV  *R2,R2
+       JEQ  DLOOP2
+       MOV  R2,@SADDR
+       INCT R2
+       MOV  *R2+,R9
+       MOVB @SCLEN+1,R5
+       JEQ  DJUMP4
+       CB   R5,*R2+
+       JNE  DLOOP3
+       SRL  R5,8
+       LI   R6,NAMBUF
+DLOOP4 CB   *R6+,*R2+
+       JNE  DLOOP3
+       DEC  R5
+       JNE  DLOOP4
+DJUMP4 INC  R1
+       BL   *R9
+       JMP  DLOOP3
+       SBZ  0
+       LWPI DSRWS
+       MOV  R9,R0
+       BLWP @VSBR
+       SRL  R1,13
+       JNE  DJUMP7
+       RTWP
+DJUMP5 LWPI DSRWS
+DJUMP6 CLR  R1
+DJUMP7 SWPB R1
+       MOVB R1,*R13
+       SOCB @SPACE,R15
+       RTWP
+
+;;;;;;;;;;;;;;;;;;;;;;;;;
+SHOWWS EQU  >8300	;use fast WS !
+SCLEN  EQU  >8354             Use by the DSRLNK BLWP program
+POINTR EQU  >8356             Points to VDP length byte of PAB
+KEYVAL EQU  >8375             Use by the KSCAN  BLWP program
+TIMER  EQU  >8379             VDP Interrupt timer
+STATUS EQU  >837C             GPL Status and new key pressed
+INTCTL EQU  >83C2             ROM Interrupt control
+USRINT EQU  >83C4             User Interrupt address
+CRULST EQU  >83D0             Use by the DSRLNK BLWP program
+SADDR  EQU  >83D2             Use by the DSRLNK BLWP program
+VDPR1  EQU  >83D4             Copy of VDP R1 for console use
+AUTOFF EQU  >83D6             Auto screen blanker counter
+GPLWS  EQU  >83E0             GPL workspace for DSR routines
+VDPRD  EQU  >8800             VDP read  data
+VDPWD  EQU  >8C00             VDP write data
+VDPWA  EQU  >8C02             VDP write address
+
+SECOND DATA >0200		;for spacebar seconds comparison
+five   data >0505		;keyboard mode. 
+
+SPACE  DATA >2000             Used by DSRLNK, NUMASC, PAUSE
+DELAY  DATA >0000
+PERIOD BYTE '.'               Used by DSRLNK
+HEXAA  BYTE >AA               Used by DSRLNK
+       EVEN
+
+
+; TI ARTIST FILE PAB and MENU PAB
+;
+; 0->1800 screen
+; >1800->2000 - 'unused' 
+; >2000->3800 color
+;
+; we could consolidate to one PAB for _C and _P but we have the space..
+;
+
+artpab DATA >0500
+artbuf DATA >0   	;buffer (in this case, VDP table)
+       DATA 0
+       DATA >1800       ; size of image - 6k
+       BYTE 0
+       BYTE 12
+       TEXT 'DSK5.TITLE_P                        '              Loading drive number 
+
+artpabc DATA >0500
+artbufc DATA >2000	; buffer (in this case, color table)
+       DATA 0
+       DATA >1800 	;size of image - 6k
+       BYTE 0
+       BYTE 12                   
+       TEXT 'DSK5.TITLE_C                       '              Loading drive number 
+
+; PAB for loading MENU via "CALL"
+callpab BYTE >07,>00
+callbuf BYTE >31,>00	buffer  (don't munge disk controller ram! 4.11.2020)
+       BYTE 0,0
+       BYTE >18,>00	len
+       BYTE 0
+       BYTE 4                   
+       TEXT 'MENU ' 	;Horizon user-defined CALL maximum size is 5 bytes!
+
+UTILWS BSS  32                Workspace for BLWP's
+DSRWS  BSS  32                Workspace for DSRLNK BLWP
+NAMBUF BSS  10                Buffer for DSRLNK compars
+VDPSAV EQU $+2		;done 4-13
+;; VDPSAV BSS >300		; turn into an EQU $ later to diminish program size
+SLAST END
+
+
+
+
+
+
+
