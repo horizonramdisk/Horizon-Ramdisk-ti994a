@@ -80,13 +80,13 @@ PADSPC BSS >57EE-$	;pad space versus using AORG to create 2nd segment  12.8.2019
 FRESPC EQU  $                           CALC FREE SPACE OF 6K PART <--+
 ;;       AORG >57EE                       DATA FOR RAMBO ROS LINK
 BOCALL DATA >0000               >57EE   THE END OF ALL DSR'S!!!!!!!   |
-       DATA BO$LNK              >57F0   ADDRESS OF THIS CALL          |
+       DATA BO_LNK              >57F0   ADDRESS OF THIS CALL          |
        DATA >01B0               >57F2   RAMBO CALL >B0 (DATA)         |
 DSR8ON DATA >8001               >57F4   CRU VALUE FOR RAMBO ON        |
-BO$OUT LDCR @LINK,0             >57F6   RETURN TO HORIZON MODE        |
+BO_OUT LDCR @LINK,0             >57F6   RETURN TO HORIZON MODE        |
        RT                       >57FA   EXIT TO CALLING PROGRAM       |
-BO$LNK LDCR @DSR8ON,0           >57FC   TURN ON RAMBO MODE            |
-       JMP  BO$OUT              >5800   OOPS! NO RAMBO INSTALLED      |
+BO_LNK LDCR @DSR8ON,0           >57FC   TURN ON RAMBO MODE            |
+       JMP  BO_OUT              >5800   OOPS! NO RAMBO INSTALLED      |
 SFREE1 EQU  BOCALL-FRESPC               CALC FREE SPACE OF 6K PART <--+
 
 
@@ -352,8 +352,11 @@ CALD3  BL   @WNUMB            INIT THE DRIVE
        BL   @PADLP            Pad the name and write it!
        SETO @PAB+2            Set don't execute FLAG
        CLR  @PAB+6            Set don't care about length FLAG
+
+; if menu is assembly, tries to load here and if error, it hops over JMP
        BL   @OP0AIN           Is it ASSEMBLY?
        JMP  LDPGM2            Yep, so execute the program!
+
 ;2-22
 ; for CALL MENU >1200 vs >1400 error, is it in this section?  
 ; In theory, OPOAIN should RET+2, hopping to below GROM code.
@@ -366,14 +369,18 @@ CALD3  BL   @WNUMB            INIT THE DRIVE
        MOVB @GRMRA,@SAVE9     Save MSByte of GROM address
        MOVB @GRMRA,@SAVE9+1   Save LSByte of GROM address
        DEC  @SAVE9            Correct address to last byte
+
        BL   @OP0BIN           Is it BASIC?
        JMP  LDPGM1            Hmm, this should never happen!
+
        BL   @OP0CIN           Is it CARTRIDGE?
        JMP  LDPGM1            Do nothing when a CARTRIDGE!
+
 SAVE9  EQU  $+2               Point to the >0000 below
        LI   R1,>0000          Get old GROM address
        BL   @GRM              Restore the GROM address back
        B    @NOTFND           Exit if ERROR
+
 LDPGM1 MOV  @SAVE9,R1         Get old GROM address
        BL   @GRM              Restore the GROM address back
        JMP  CALERR            Exit if CARTRIDGE
@@ -479,10 +486,18 @@ INTED  EQU  $                 Use to calc size of above code
 ********************
 * >A050 AUTO-START *
 ********************
+
+; Arrives here from Powerup (ROS-S: POWRP1)
+; GPLWS is now WS
+;
 BTLOC  EQU  >A050             WHERE TO MOVE THE CODE
 MENT   DATA BTLOC,BTSIZE      DATA FOR THIS RELOCODE
 BTPGM  MOV  R12,@SAVR12       Save CRU Addr. of this card
        MOV  R11,@SAVR11       Save return address to B @>0000
+
+;4-3-2020
+       mov  r13,@TTR13		;save GROM address at entry so we can restore it
+;
        CLR  @>8372            Turn off the CORCOMP MENU DISPLAY!
        LI   R2,BTPNTR+2       Reset stack of MENU's
        CLR  *R2+              Mark end of stack
@@ -514,12 +529,17 @@ BOOT5  BL   *R9               EXECUTE POWER-UP CODE
 *---
 * ROS 8.14F modified BTRUN - 4 bytes less code + no BL @GRMSET at this time
 *---
+
+
 BTRUN  BL   @CPUMOV
-       DATA >8300,BTDATA
+       DATA >8300,BTDATA	;save scratchpad 112*2 bytes
+
        MOV  @CCON,@>8372
-       MOVB @GRMRA,@SAVADR
-       MOVB @GRMRA,@SAVADR+1
+       MOVB @GRMRA,@SAVADR	;save grom read address into BTEXIT+2
+       MOVB @GRMRA,@SAVADR+1	;we will restore this later
        DEC  @SAVADR
+
+; DO WE NEED TO SAVE THE GROM BASE ?   R13 ?
 
 ******* modified March 2, 2012 to reflect 8.14F above! **************
 * BTRUN  MOV  @CCON,@>8372      Turn on the CORCOMP MENU DISPLAY!
@@ -531,6 +551,25 @@ BTRUN  BL   @CPUMOV
 *      MOV  R1,@SAVADR        Save the GROM address
 *      BL   @GRMSET           Restore the GROM address
 **********************************************************************
+
+; loop through cards/menus
+; if menu found, we will execute
+; if menu NOT found, keep scanning
+; if still not found, jump to BTERR (which then jumps to 
+
+
+
+; Problem.
+; If Autostart ON and menu present, ramdisk won't load it with ubergrom in the system
+;  however, if I disable powerup and go to basic, I can type "call menu" and it launches.
+;  Where is the conflict?
+; If I change MENU to MENQ (nonexistant file) and do CALL MENU, lockup from basic.
+;
+; IS IT POSSIBLE that the powerup address/setting is incorrect in ROS until CFG manipulates it, and
+; my routine to save/restore the powerup is fixing the issue ?
+;
+;
+
 BTNEXT SBZ  0                 Turn off current card
        MOV  @BTPNTR,R2        Get next stack entry
        DECT R2                Point to last stack entry
@@ -553,8 +592,11 @@ BTGO   MOV  R2,@BTPNTR        Save current stack pointer
        MOV  *R2,R12           Get CRU addr. of this MENU
        JNE  BTGO              If not at end then execute it!
 
+
+
+
 SAVADR EQU  $+2+BTLOC-BTPGM   Address of >0000 part below
-BTEXIT LI   R1,>0000          Restore GROM address
+BTEXIT LI   R1,>0000          Restore GROM address	;saved at BTRUN
 BTLOGO BL   @GRMSET           Setup GROM address
        BL   @CPUMOV           Save CPU PAB to high memory
 
@@ -593,8 +635,13 @@ SAVR11 EQU  $+2+BTLOC-BTPGM   Address of >0000 part below
        B    @>0000            Return to calling DSRLNK program
 
 ; there was no menu so now let's look for a module
+;  if module not found, BTEXIT
+; if found and user program, set address and load boot logo
+;
+ttr13  equ >b000  ;temporary spot
 
 BTERR  LI   R1,>6000          Address of first module
+;;      mov  @ttr13,r13	;restore R13 grom address 
        BL   @GRMSET           Setup GROM address
        CB   *R13,@BTHXAA      Check if valid module header
        JNE  BTEXIT            No module, so exit (AND PREPARE TO DISPLAY LOGO/ROS VERSION)
@@ -612,12 +659,16 @@ BTERR  LI   R1,>6000          Address of first module
        MOVB *R13,@GPLWS+3     Read LSByte of address
        JMP  BTLOGO            Load the BOOT LOGO	(we never see it in this case. rom take over upon return?)
 
-
+;;GRMRD  EQU  >9800             Address of GRM read  data
+;;GRMRA  EQU  >9802             Address of GRM read  address
+;;GRMWD  EQU  >9C00             Address of GRM write data
+;;GRMWA  EQU  >9C02             Address of GRM write address
 GRMSET EQU  $+BTLOC-BTPGM     SETUP A GROM ADDRESS FROM R1
 GRM    MOVB R1,@GRMWA         Write the MSByte of the GROM address
        SWPB R1                Put the LSByte in the MSByte
        MOVB R1,@GRMWA         Write the LSByte of the GROM address
        RT                     RETURN TO THE CALLING PROGRAM
+
 
 CPUMOV EQU  $+BTLOC-BTPGM     MOVE A SECTION OF CPU RAM
        MOV  *R11+,R0          Get address of FROM:

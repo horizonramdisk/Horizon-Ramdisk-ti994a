@@ -117,6 +117,8 @@
 *		Problem is that we simply do not have enough room in the DSR for the DEvice and opcode tables.
 *		not to mention the trampoline UNLESS we put the devices in the upper 2K along with a jump to
 *		another 6k page?  Or is it possible to bring RAMBO online to jump into a page there? 
+;
+;11-14-2020	Replaced label "$" character with "_" for later xdt compatibility.
 
        TITL 'ROS 8.42 Unified '     2016
        IDT  'ROS842c'
@@ -189,13 +191,13 @@ USRDSR DATA BOCALL,DSRUSR ;020 User DSR entry link header
        BYTE >08           024 Length of the user DSR name
        TEXT '01234567'    025 Max. of 8 chars for user DSR name
        BYTE >00           02D NOT USED
-       DATA BO$OUT        02E Address of the user DSR code
+       DATA BO_OUT        02E Address of the user DSR code
 USRINT DATA >0000,INTUSR  030 User Interrupt entry link header
        DATA >0000         034 No length / No name
 PWRUP  DATA PWRNXT,PWRIN  036 First Power-Up entry link header
        DATA >0000         03A No length / No name
-USRPWR DATA BO$OUT        03C Address of the user POWER-UP code
-       DATA BO$OUT        03E Address of the user INT code
+USRPWR DATA BO_OUT        03C Address of the user POWER-UP code
+       DATA BO_OUT        03E Address of the user INT code
 ;
 ; 6 bytes per file; max 16 files open. See OPEN opcode label OP00P1
 ;
@@ -420,6 +422,7 @@ PWRGO  LDCR @LINK,0           Make sure 2K DSR in there
        JEQ  POWRP1            Not pressed, so BOOT
        B    @NOTFND           Exit since SHIFT is pressed
 
+; This copies the AUTOSTART code (ROS-S3 :MENT) into memory and executes
 POWRP1 LI   R2,MENT           Load BOOT table
 LDEXIT MOV  *R2+,R0           Get address of BOOT code
        MOV  R0,@SAVST         Save address for PAD branch
@@ -428,6 +431,7 @@ POWRP2 MOV  *R2+,*R0+         Move a word of code
        DECT R1                Check if finished
        JNE  POWRP2            Nope, so move some more
 
+; GPLWS now active for the autostart code
 EXIT   LWPI GPLWS             Load GPL workspace
        LI   R0,EXDATA         Point to the EXECUTER program
        MOV  *R0+,R1           Move B *R2 into GPL R1

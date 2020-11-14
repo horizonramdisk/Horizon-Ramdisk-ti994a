@@ -56,6 +56,7 @@
 ; 2-17-2020	SCRATCH OPCODE CRIPPLED TO TEST FAST VDP READ ROUTINE
 ;		fast vdp routine shaved 25% but not enough to warrant removing opcode
 ;
+;11-14-2020	Replaced label "$" character with "_" for later xdt compatibility.
 
 
 *****************
@@ -164,13 +165,13 @@ SECIO  MOV  @FAC+4,R8         Get buffer address
        BL   @ADDR             Bring up the sector wanted
 FSPGM  EQU  $+2               Point to the 256 below
        LI   R0,256            Length of transfer
-       LI   R11,IO$OK         Where to go after the transfer
+       LI   R11,IO_OK         Where to go after the transfer
        MOVB @FAC+3,R1         Is it a READ or a WRITE
        JNE  TREAD             If READ then jump to TREAD
        ABS  @WTPR             If WRITE then check protection
        JEQ  TWRITE            If no protection, then jump
 WPERR  MOVB @ERR1,R0          SEND WRITE PROTECTED ERROR
-       JMP  IO$ERR            EXIT THE DSR
+       JMP  IO_ERR            EXIT THE DSR
 
 **********************
 * FORMAT ROUTINE >11 *
@@ -178,8 +179,8 @@ WPERR  MOVB @ERR1,R0          SEND WRITE PROTECTED ERROR
 FORMAT ABS  @WTPR             Check if disk is write protected
        JNE  WPERR             Yep, so exit with PROTECTION ERROR
        MOV  @FORSEC,@FAC      Pass back the number of sectors FORMATED
-IO$OK  CLR  R0                NO ERRORS, so clear the error byte
-IO$ERR MOVB R0,@FAC+6         Return with or without a ERROR message
+IO_OK  CLR  R0                NO ERRORS, so clear the error byte
+IO_ERR MOVB R0,@FAC+6         Return with or without a ERROR message
        B    @GPRTN            EXIT THE DSR
 
 **************************
@@ -194,9 +195,9 @@ PROTCT ABS  @WTPR             Check if disk is write protected
        MOVB @FAC+3,R0         Check if PROTECTION ON or OFF
        JEQ  PROT3             If ZERO, then turn off PROTECTION
        SOC  @PRO,*R6          Turn on  protection for this file
-       JMP  IO$OK             EXIT THE DSR
+       JMP  IO_OK             EXIT THE DSR
 PROT3  SZC  @PRO,*R6          Turn off protection for this file
-       JMP  IO$OK             EXIT THE DSR
+       JMP  IO_OK             EXIT THE DSR
 
 **********************
 * RENAME ROUTINE >13 *
@@ -213,7 +214,7 @@ RENAME ABS  @WTPR             Check if disk is write protected
        COC  @PRO,R0           Check if the file is protected
        JNE  RENM6             Nope, so skip over PROTECTION ERROR
 RENERR MOVB @ERR6,R0          ERROR: Send error message back!
-       JMP  IO$ERR            EXIT THE DSR
+       JMP  IO_ERR            EXIT THE DSR
 RENM6  BL   @GETNME           Get the new filename from VDP/CPU memory
        BL   @SEARCH           Check if this file is on the diskette
        JMP  RENM13            Not found, so skip over ERROR return
@@ -227,7 +228,7 @@ RENM12 MOVB *R1+,*R6+         Move a byte of the filename
        JNE  RENM12            Nope, so move some more
        BL   @COUNT            Count the number of files on the disk!
        BL   @ADJUST           Resort the catalog on sector #1
-       JMP  IO$OK             EXIT THE DSR
+       JMP  IO_OK             EXIT THE DSR
 
 *****************************
 * TRANSFER DIRECT INPUT >14 *

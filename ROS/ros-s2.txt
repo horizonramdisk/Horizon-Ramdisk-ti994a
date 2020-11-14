@@ -31,6 +31,10 @@
 * 1.19.2020 Identified two additional edge cases in the cluster routines.
 * 1.20.2020 fixes and edge case testing reviewed 
 *
+* 4.3.2020  opcode >0b is VERY specific to stock XB. See memory and GROM addresses.
+*
+*11-14-2020 Replaced label "$" character with "_" for later xdt compatibility.
+*
 ************************
 * STATUS  - OPCODE >09 *
 ************************
@@ -116,7 +120,7 @@ OP09RZ B    @>0000            RETURN TO THE CALLING PROGRAM
 * ASSEMBLY  - >0A *
 *******************
 OP0AN0 LI   R11,NOERR         Load EXT. RETURN ADDRESS
-OP0AIN MOV  R11,@OP$ZZ+2      Save INT/EXT RETURN ADDRESS
+OP0AIN MOV  R11,@OP_ZZ+2      Save INT/EXT RETURN ADDRESS
        MOVB @SPACE,@FLNAME    Just in case of 10 char name!
        MOV  @PAB+2,@SAVST     Save execute address
        CLR  @PAB+2            Make it now the real address
@@ -148,7 +152,7 @@ OP0AN6 CB   *R1+,@SPACE       Is byte a ' '
        AB   @ST7,*R1          Add 1 to it, to make the new name
        JMP  OP0AN1            Jump back up, and do it all again
 OP0AN7 C    @SAVST,@FFFF      Done, do we execute it?
-       JEQ  OP$RT             Nope, so skip executer
+       JEQ  OP_RT             Nope, so skip executer
        B    @EXIT             Yep, so EXECUTE THE FILE
 *
 * GET THE START OF A FILE
@@ -200,12 +204,12 @@ TRNFIP B    @>0000            RETURN TO LOADER
 *
 * RETURNS FROM OPCODES A,B,C
 *
-ABCERR C    @OP$ZZ+2,@OP0AN0+2        EXT. or INT. entry?
+ABCERR C    @OP_ZZ+2,@OP0AN0+2        EXT. or INT. entry?
        JNE  LDERR             Jump if INT. entry mode
        B    @ERRT7            EXT. so send ERROR msg. back
-LDERR  INCT @OP$ZZ+2          INT. so point to the next opcode
-OP$RT  LDCR @LINK,0           Bring up the 2K DSR part
-OP$ZZ  B    @>0000            No execute, so exit back to the DSR
+LDERR  INCT @OP_ZZ+2          INT. so point to the next opcode
+OP_RT  LDCR @LINK,0           Bring up the 2K DSR part
+OP_ZZ  B    @>0000            No execute, so exit back to the DSR
 
 ;===================================
 
@@ -214,7 +218,7 @@ OP$ZZ  B    @>0000            No execute, so exit back to the DSR
 * X/BASIC   - >0B *
 *******************
 OP0BN0 LI   R11,NOERR         Load EXT. RETURN ADDRESS
-OP0BIN MOV  R11,@OP$ZZ+2      Save INT/EXT RETURN ADDRESS
+OP0BIN MOV  R11,@OP_ZZ+2      Save INT/EXT RETURN ADDRESS
        BL   @SEARCH           Look for the file
        JMP  ABCERR            Not found, so send ERROR msg.
        CLR  R3                Founded, so start at RELSEC0
@@ -242,6 +246,14 @@ OP0BN1 COC  @ST7,R0           Check if PROGRAM  type
        ABS  R4                Calc new FLAG value
        C    R4,R5             Check if an XB PROGRAM file
        JNE  ABCERR            Exit to ERROR if not
+
+; 4-3-2020
+; 
+; this routine expects xb in a specific bank.  it may not work with xb27, etc
+;
+; See OP0nB6 and the GRM address R13. Also the specific memory location tests.
+;
+
 OP0BN2 LDCR @LINK,0           Bring up 2K part of DSR
        LI   R1,>6370          Point to the XB entry point
        BL   @GRM              Setup GRM read address
@@ -293,7 +305,7 @@ OP0BN6 CLR  *R14              Clear a byte of the XB COMMAND AREA
 *******************
 OPCERR B    @ABCERR           Re-branch to ERROR code
 OP0CN0 LI   R11,NOERR         Load EXT. RETURN ADDRESS
-OP0CIN MOV  R11,@OP$ZZ+2      Save INT/EXT RETURN ADDRESS
+OP0CIN MOV  R11,@OP_ZZ+2      Save INT/EXT RETURN ADDRESS
        CLR  @FLAG             Clear first file FLAG
        MOVB @HEX1E,@PGRM      Assume no module RAM!
        MOV  R12,@SV5          Save CRU address of this card
@@ -308,11 +320,14 @@ OP0CN1 BL   @GETFIL           Get the start of the file
        JEQ  OPCGPL            If >FFxx then file is MODULE
        CB   R9,@FF00+1        If >00xx then file is MODULE
        JNE  OPCERR            If other then send ERROR msg.
+
 OPCGPL CB   @4(R6),@>4000     Check if valid header
        JNE  OPCGPM            Nope, so don't check RAM FLAG
        CB   @7(R6),@PGA5      Check if module has RAM
        JNE  OPCGPM            Nope, so leave the system alone
        MOVB @HEX0A,@PGRM      Yep, so make sure RAM is enable!
+
+
 OPCGPM MOV  @PGRAM,R12        Check if PGRAM in the system
        JEQ  OPCNXT            Nope, so check for another file
        LI   R0,>1200          Lower module space CRU bits
@@ -345,6 +360,7 @@ OPCASM INCT R6                Point to the loading address
        MOV  @SV5,R12          Restore the Horizon CRU address
        BL   @TRNFIL           Transfer the file to CPU RAM
        MOVB *R6+,*R8+    ***  DATA for the above branch
+
 OPCNXT MOV  @SV5,R12          Restore the Horizon CRU address
        ANDI R9,>FF00          Make sure within valid range!
        ABS  R9                File done, check if any more
@@ -364,7 +380,7 @@ OPCEND MOV  @PGRAM,R12        Done, get PGRAM card address
        JEQ  OPCENE            Jump over enabler if no card
        LDCR @PGRM,8           Turn on the PGRAM card
 OPCENE MOV  @SV5,R12          Restore the Horizon CRU address
-       B    @OP$RT            EXIT FROM THE LOADER
+       B    @OP_RT            EXIT FROM THE LOADER
 
 ;////////////
 
