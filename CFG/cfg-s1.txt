@@ -59,6 +59,8 @@
 ;
 ; 3.27.2020 	Fixed powerup save/restore. 
 ;
+; 11.14.2020	Updated all "$" labels to "_" for xas99 compatibility
+
 **********************
 * DISPLAY CFG SCREEN *
 **********************
@@ -264,7 +266,10 @@ OPT1K  SBZ  0                 Turn off the CARD
        LI   R2,3              Start with the Q,N,L keys
        ABS  @VALID            Check if VALID ROS LOADED
        JEQ  NXT0              Nope, so don't allow S,F,E,D keys
+
        C    *R2+,*R2+         VALID ROS add 4 more keys
+       INC  R2		;5-20-2020, add one more for hidden TIPI option
+
        MOV  R15,R15           Check if RAMBO on this card
        JEQ  NXT0              Nope, so don't allow the U key
        INC  R2                Yep, so check the U key also
@@ -863,7 +868,12 @@ SV     LI   R3,>0600
 *****************
 * LOAD THE ROS8 *
 *****************
+optsav data 0
+
+TIPLD
 LD     CLR  R5		; FLAG 0=saved disk info; 1=
+	movb r3,@optsav	;save option for TIPI load test
+
        ABS  @VALID		is there a valid ros loade?
        JEQ  SAVD3		no, so don't ask to preserve info
 
@@ -972,12 +982,38 @@ savc55  mov  *r1+,*r2+		;move 10 bytes per iteration
 	mov *r1,r1	;get address  (>36)
 	mov *r1,*r2+	;is value here a 0 or address for 2nd powerup link?  (0 off; <>0 on)
 
-SAVD3  LI   R3,>0500
+
+
+;
+; Test for TIPI https load versus regular load
+;
+;
+SAVD3
+	cb	@optsav,@TIPT	;Tipi load option?
+        jne     savd3a		;no
+	li	r0,>0f80	;yes, load the PAB and http address
+	li	r1,tippab
+	li	r2,10+82+5	;fix hardcoding later +5 extra space
+	blwp   @vmbw
+	clr   r0
+	ldcr  r0,0
+
+	li	r6,>0f89
+	mov	r6,@>8356
+	blwp    @dsrlnk
+	data   	8
+	jne	TIPOK1		;loaded OK
+	b   @broken		;failed
+
+
+;;SAVD3
+savd3a LI   R3,>0500
        MOV  R3,@RUNPAB   set up pab for a load
        BL   @GODSR
        DATA LDPT,FNAME
 
-       LI   R0,>1000     GET DSR HEADER OF FILE LOADED
+; branch here from special tipi load if file was OK
+TIPOK1 LI   R0,>1000     GET DSR HEADER OF FILE LOADED
        LI   R1,RESULT
        LI   R2,2
        BLWP @VMBR
@@ -1202,7 +1238,7 @@ RORG   BL   @GODSR            Setup and Execute the DSR
        MOV  @NOUSER,@>402E
        MOV  @NOUSER,@>403C
        MOV  @NOUSER,@>403E
-       LI   R4,BO$END         FIRST FREE ADDRESS IN DSR MEMORY
+       LI   R4,BO_END         FIRST FREE ADDRESS IN DSR MEMORY
 RORG1  CLR  *R4+
        CI   R4,>6000
        JL   RORG1
@@ -1259,7 +1295,7 @@ SRTBL2 CB   *R8+,*R0+         Compar a byte of the name
 LDIDT  BL   @CONVT            Convert the length field
        MOV  R5,R5             Check if is an AORG type OBJECT
        JEQ  BDLD              Yep, so exit with ERROR message
-       CI   R5,>6000-BO$END   Check if not enough free memory
+       CI   R5,>6000-BO_END   Check if not enough free memory
        JH   BDLD              Yep, so exit with ERROR message
        CLR  R1                Start at the first BYTE in USRIDT
 LDIDT1 CB   *R3,@DOT          Check if at the END OF DSR NAME
@@ -1282,7 +1318,7 @@ LDIDT3 CI   R1,8              Check if DSR NAME is at max. length
 * 3 & 4 LOAD EXTERNAL REFERENCE
 *
 REXREF BL   @CONVT            Get last used location of RORG REF
-       AI   R5,BO$END         Add RORG address offset
+       AI   R5,BO_END         Add RORG address offset
        JMP  EXREF0            Jump to common part of EXT REF
 AEXREF BL   @CONVT            Get last used location of AORG REF
 EXREF0 BL   @SRHTBL           Check if the REF is in the table
@@ -1295,7 +1331,7 @@ EXREF1 MOV  R5,R1             Any more REF's to this name
 * 5 & 6 LOAD EXTERNAL DEFINITION
 *
 REXDEF BL   @CONVT            Get address of the RORG DEF
-       AI   R5,BO$END         Add RORG address offset
+       AI   R5,BO_END         Add RORG address offset
        JMP  EXDEF0            Jump to common part of EXT REF
 AEXDEF BL   @CONVT            Get address of the AORG DEF
 EXDEF0 BL   @SRHTBL           Check if the DEF is in the table
@@ -1305,7 +1341,7 @@ TAGEND B    @ENTER            Done with this TAG, so get next TAG
 * 9 & A LOAD THE ADDRESS COUNTER
 *
 RLADR  BL   @CONVT            Get new RORG address counter
-       AI   R5,BO$END         Add RORG address offset
+       AI   R5,BO_END         Add RORG address offset
        JMP  LLADR             Jump to common part of LOAD ADDR.
 ALADR  BL   @CONVT            Get new AORG address counter
 LLADR  CI   R5,>4000          Check if new address outside DSR
@@ -1318,7 +1354,7 @@ LLADR  CI   R5,>4000          Check if new address outside DSR
 * B & C LOAD THE NEXT DATA WORD
 *
 RDATA  BL   @CONVT            Get the next RORG DATA word
-       AI   R5,BO$END         Add RORG address offset
+       AI   R5,BO_END         Add RORG address offset
        JMP  LDATA             Jump to common part of LOAD DATA
 ADATA  BL   @CONVT            Get the next AORG DATA word
 LDATA  MOV  R5,*R4+           Store the DATA into the DSR memory

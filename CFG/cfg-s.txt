@@ -82,6 +82,18 @@
 ;
 ; 2-23-2020	Added GPIB IEEE-488 and Myarc Personality cards, Thermal printer 
 ;
+; 5-25-2020	CRDSET, check for CRU 9640 (for geneve detection) and skip turning
+;               on that CRU bit! Device at >1600 no longer turned on incorrectly.
+;
+;              *Verify RAMBO allocation is not overlapping with the ramdisk drive allocations
+;  		which would in turn create a situation where RAMBO would corrupt the drives.
+;		(Noted this possibility while fixing 9640 CRU problem)
+; 
+;		*Consider adding a routine to test for a Geneve format, and warn user if they
+;		are about to reformat their Geneve ramdisk.  See MDOS 7.00 / FORM code.
+;
+; 11.14.2020	Updated all "$" labels to "_" for xas99 compatibility
+
 
        TITL 'Horizon RAMdisk CFG v8.42c'
        IDT  'CFG842'
@@ -89,9 +101,9 @@
        DEF  SFIRST,SLAST
 RAMAPG EQU  >8002            Geneve >4000 & >6000 memory mapper address
 RAMAPT EQU  >8302            Used to test if system is a TI99 or GENEVE
-PAG$RT EQU  >834A        +-> Max. number of pages / (page value)    <-+
+PAG_RT EQU  >834A        +-> Max. number of pages / (page value)    <-+
 PAGNUM EQU  >834C        +-> 0=RT MAX. # of pages / >0=Page to set  <-+
-RT$ERR EQU  >8350            0=NO ERROR / >0= ERROR CODE  (not defined)
+RT_ERR EQU  >8350            0=NO ERROR / >0= ERROR CODE  (not defined)
 INTCTL EQU  >83C2
 USRINT EQU  >83C4
 VDPR1  EQU  >83D4
@@ -345,8 +357,9 @@ CRUK2  ABS  @GENEVE      Geneve?
        JNE  GEN25        no. standard DSR
        LI   R1,CGENROM   ;26
 ;;       INC  R1           Yes. ROMpage DSR
+
 GEN25  LI   R12,>9640    display!
-       BL   @CRDSET
+       BL   @CRDSET	;5-24, added check for this CRU in CRDSET!
        LI   R1,CARDLN
        MOV  R14,R0
        BLWP @VMBW
@@ -403,8 +416,12 @@ VREGS  DATA >0A00,>0B00,>0C00,>0D00,>0E00
 ; R1 - The entry in the list of names. Each name is 16 bytes long
 
 CRDSET MOV  R11,@CARDRT+2     R1 AND R3 CONTAIN TYPE OF CARD!
+
+       CI   R12,>9640	;5-24-2020; Geneve?
+       JEQ  CRDSG1	;yes, don't turn on this CRU [essentially, >1640]
+
        SBO  0
-       SLA  R1,4		; x16 to point to the proper name
+CRDSG1 SLA  R1,4		; x16 to point to the proper name
        LI   R0,CARDLN+1
        AI   R1,NAMES
        LI   R2,14
@@ -646,7 +663,7 @@ RAMOK2
 ;      SRL  R0,2              Calc 2K page count into 8K count
        srl  r0,1	;2-15 error
 
-       MOV  R0,@BO$WS+20      Update RAMBO ROS MAXPAG value
+       MOV  R0,@BO_WS+20      Update RAMBO ROS MAXPAG value
        SLA  R0,3              Convert count into K PROG RAM value
 TSTDK2 BL   @NUMASC           Write the PROG RAM value
        DATA CARDLN+38         ADDRESS OFFSET FOR SCREEN POSITION
