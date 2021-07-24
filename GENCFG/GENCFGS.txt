@@ -1,0 +1,1204 @@
+; File: GENCFGS
+;
+; GenCFG (c)2021 T.Tesch
+;
+; Geneve 9640 native OS program to format the Horizon Ramdisk
+;      - Format one floppy partition and/or one RamHD partition
+;      - Backward compatible with MDOS 6.50 and earlier (disk only)
+;      - Backward compatible with Geneve boot EPROM; old ROS code deprecated
+;
+; 2.20.2021 Decision to write new utility; GenCFG born.
+;           Device detection code from TI-99/4A CFG program (C)1990 BMS/OPA
+;
+; 3.14.2021 Integration of HRD, AUFS, and STUBS
+;           Scan will wrap at 65535 sectors (16MB)
+;           MDOS and format direct sector IO is limited to 32,767 sectors
+;           at present (8MB); must find/replace all signed comparisons
+;
+; Note:     Hard drive partition begins +2 after DSK partition, or
+;           sector 2 if no DSK partition. This is to reduce risk of
+;           a disk format program overwriting the HD partition VIB
+;
+; 3.20.2021 Beery tested 16MB configuration. We seem to be limited to
+;           8MB by either hardware, MAME, or the OS.  The low-level OS
+;           code appears to be correct for >8MB.
+;
+;          -DSK vib and FDIR setup           DONE
+;          -Hard drive routine engaged       DONE
+;            -Copy VIB/bitmap to sectors >20-3F?  NO, Clear. DONE
+;            -Fix MDOS and GC hard-code      DONE
+;            -clear sector >40               DONE
+;            -warn user/skip hard drive if insufficient space? DONE
+;
+; 4.3.2021  Added 1440 sector option (for PFM disk creation)
+; 4.4.2021  Added display-only option (call program w/any paramter)
+;
+; 7.6.2021 -Allow small ramdisk format only. (per @DHE)
+;          -Floppy-only flag to configure options/display and skip ramhd
+;       $$$ FUSTET - are we forgetting to set bitmap beyond max sector??
+;                    NO, but the routine is limited and must be updated
+;          -Minimum ramHD now 800 sectors; minimum floppy 64 sectors
+;
+; 7.20.2021 Added some debug; CorComp fails after exit. BWM tested 3
+;           versions and discovered that when the ramdisk detection is
+;           disabled, the CC no longer fails.  Added code to limit ramdisk
+;           detection to CRU<<1700.  Awaiting results <<<<$$$$
+;
+; 7.22.2021 Cleaned up the code
+;           Test code added to floppy format routine
+; 7.24.2021 Validated files for initial github release
+;       $$$ New disk partition format routine has NOT yet been validated
+
+START  LIMI 0
+       LWPI >F000
+       MOVB  @>F112,@SAV400   ;save page at >4000-5FFF to restore at exit
+       MOVB  @HBA,@>F112      ;peripheral bus now visible
+
+RESCAN BLWP @TTYOUT
+       DATA TITLE,0
+
+       BL   @CFG2        ;poll cards;show results;build TABLE
+       CLR  *R13         ;flag for end of the ramdisk table
+
+       MOV  @>0128,R0    ;are there ANY parameters?
+       JNE  EXITPROGRAM  ;yes, display only
+
+CHOOSER
+       BLWP @TTYOUT
+       DATA CHOICE,0
+
+       LI   R0,4
+OPTL1  LIMI 1            allow interrupts here
+       LIMI 0
+       XOP  @KEY,0
+       JNE  OPTL1
+
+       ANDI R1,>5F00
+       CI   R1,'Q'*256
+       JEQ  EXITPROGRAM
+       CI   R1,'S'*256
+       JEQ  RESCAN
+       CI   R1,'B'*256
+       JEQ  OPBOOT
+       CI   R1,'F'*256
+       JEQ  OPFORM
+       CI   R1,'R'*256
+       JEQ  OPRECV
+       CI   R1,'I'*256
+       JEQ  OPIDEN
+       JMP  OPTL1
+
+OPBOOT BL  @BOOTSET
+       JMP  RESCAN
+OPFORM BL  @FORMAT
+       JMP  RESCAN
+OPRECV BL  @RECOVERHD
+       JMP  RESCAN
+OPIDEN BL   @IDENTIFYRD
+       JMP  RESCAN
+
+;----
+CHOICE BYTE 13,10
+       TEXT 'Q)uit I)dentify F)ormat S)can B)ootflag R)ecoverHD ? '
+       BYTE 0
+
+EXITPROGRAM
+       MOVB  @SAV400,@>F112
+       BLWP @TTYOUT
+       DATA CRLF2,2
+       BLWP  @0
+
+
+;--------------------
+; Recover boot header
+;  Copy located after DSK or before HD partition
+;  Copy contents from sector to 8k sram
+RECOVERHDRT RT
+RECOVERHD
+       BLWP @TTYOUT
+       DATA RECT1,0
+
+       JMP  RECOVERHDRT  return
+
+
+RECT1  BYTE 13,10,10
+       TEXT 'Recover option not yet implemented...'
+       BYTE 13,10,0
+       DATA 0
+
+;--------------------
+; Boot Flag flipflop
+BOOTRT RT
+BOOTSET
+       BLWP @TTYOUT
+       DATA BOOTT1,0
+       LI   R0,4
+OPTB1  XOP  @KEY,0
+       JNE  OPTB1
+       CI   R1,27*256
+       JEQ  BOOTRT
+       CI   R1,'0'*256
+       JL   OPTB1
+       CI   R1,'7'*256   ;9
+       JH   OPTB1
+       AI   R1,->3000    >-x--
+       AI   R1,>1000    +>1000 =>CRU
+
+       LI   R2,TABLE
+OPTBSC MOV  *R2+,R12     First entry is CRU
+       JEQ  OPTB2        ==0, not found
+       C    R12,R1        this cru in table?
+       JEQ  OPTB3        yes
+       AI   R2,4         next entry (this will change later)
+       JMP  OPTBSC
+
+OPTB2  BLWP @TTYOUT
+       DATA BOOTT2,0
+OPTB22 LI   R0,4
+OPTB2A XOP  @KEY,0
+       JNE  OPTB2A
+       B    @RESCAN
+
+OPTB3  SBO  0
+       C    @>4000,@DS9640    formatted,not bootable
+       JEQ  OPTB3A            yes, flip
+       C    @>4000,@DSRHDR    formatted, set to boot
+       JEQ  OPTB3B            yes, turn off boot
+       SBZ  0
+       JMP  OPTB2        neither, abort
+
+OPTB3A MOV  @DSRHDR,@>4000    enable boot/header
+OPTB3C SBZ  0
+       B    @RESCAN
+
+OPTB3B MOV  @DS9640,@>4000    disable boot/header
+       JMP  OPTB3C
+
+;------------------------------
+; Identify ramdisk via CRU
+;   Since the ramdisk in question might not be fully functional, we will
+;   just turn the card on and let the user sort things out.
+;
+IDENRT RT
+
+IDENTIFYRD
+       BLWP @TTYOUT
+       DATA IDENTX1,0     ;ask user which ramdisk to format
+       LI   R0,4
+OPTI1  XOP  @KEY,0
+       JNE  OPTI1
+       CI   R1,27*256
+       JEQ  IDENRT
+       CI   R1,'0'*256
+       JL   OPTI1
+       CI   R1,'7'*256   ;9, should limit to 1700 per hardware
+       JH   OPTI1
+
+       MOVB R1,@CRUDISPX  display selection
+       BLWP @TTYOUT
+       DATA CRUDISP,0
+
+; turn selection into a real CRU
+       AI   R1,->3000    >-x--
+       AI   R1,>1000    +>1000 =>CRU
+
+       MOV  R1,R12
+       SBO  0            turn on the card
+
+       BLWP @TTYOUT
+       DATA IDENTX2,0     ;tell user the light is on; press a key
+
+       LI   R0,4
+OPTI2A XOP  @KEY,0
+       JNE  OPTI2A
+
+       SBZ  0            turn off the card now :)
+
+       B    @RESCAN
+;
+; WARNING: We save all header/config info LOCALLY and confirm action BEFORE
+; 3.13.21  any data is written to the ramdisk. Otherwise, an aborted format
+;          may result in trashing the drive/partition info
+FORMRT RT
+
+FORMAT
+       BLWP @TTYOUT
+       DATA FORMT1,0     ;ask user which ramdisk to format
+       LI   R0,4
+OPTF1  XOP  @KEY,0
+       JNE  OPTF1
+       CI   R1,27*256
+       JEQ  FORMRT
+       CI   R1,'0'*256
+       JL   OPTF1
+       CI   R1,'7'*256   ;9, should limit to 1700 per hardware
+       JH   OPTF1
+
+       MOVB R1,@CRUDISPX  display selection
+       BLWP @TTYOUT
+       DATA CRUDISP,0
+
+; turn selection into a real CRU
+       AI   R1,->3000    >-x--
+       AI   R1,>1000    +>1000 =>CRU
+
+       LI   R2,TABLE
+OPTFSC MOV  *R2+,R12     First entry is CRU
+       JEQ  OPTF2        ==0, not found
+       C    R12,R1        this cru in table?
+       JEQ  OPTF3        yes
+       AI   R2,4         next entry (this will change later)
+       JMP  OPTFSC
+
+OPTF2  BLWP @TTYOUT
+       DATA FORMT2,0     ;cant format, pak
+
+WAIT4KEY
+OPTF22 LI   R0,4
+OPTF2A XOP  @KEY,0
+       JNE  OPTF2A
+       B    @RESCAN
+
+;temp vars from CRU table
+FORMCRU     DATA 0
+TYPE        DATA 0
+MAXSECTORS  DATA 0
+FLOPPYONLY  DATA 0       used as flag to skip RAMHD for small ramdisks
+
+; User has selected the CRU and we found it in the detected table
+;   Get type (1= 8-bit), update R12, and copy maxsectors - all from table
+;
+OPTF3  MOV  *R2+,R1
+       CI   R1,1
+       JLE  BIT8
+       AI   R12,>0001    ;signal 16-bit for read/write routines
+BIT8   MOV  *R2+,@MAXSECTORS  ;as determined by scan
+       MOV  R12,@FORMCRU      might get rid of this var later
+
+       SBO  0                 turn on this card
+       C    @>4000,@DS9640    header, not bootable
+       JEQ  OPTF31            yes, warn
+       C    @>4000,@DSRHDR    header, boot
+       JNE  OPTF3D            no, skip warning
+
+OPTF31 BLWP @TTYOUT      warning: data detected, format? y/n
+       DATA FORMT3,0
+
+OPTF3A BLWP @GETKEY
+       ANDI R1,>5F00
+       CI   R1,'Y'*256
+       JEQ  OPTF3D
+       CI   R1,'N'*256
+       JNE  OPTF3A
+OPTF3C SBZ  0
+       B    @RESCAN
+
+D64    DATA 64           minimum for floppy partition
+D1436  DATA 1436         pre-adjusted for format routine
+D1596  DATA 1596         "
+D3196  DATA 3196         "
+D800   DATA 100          minimum for ramhd partition
+
+;check available sectors
+OPTF3D
+       CLR  @FLOPPYONLY  ;7.6.2021, set flag for NO RamHD during format
+
+       C    @MAXSECTORS,@D3200
+       JH   OPTF4A       yes, continue
+
+       SETO @FLOPPYONLY  ;no ramhd: floppy only
+       C    @MAXSECTORS,@D64    fewer than 50 sectors?
+       JH   OPTF4A
+
+       BLWP @TTYOUT
+       DATA FORMT4B,0    insufficient space (<64 sectors) PAK
+       SBZ  0
+       B    @WAIT4KEY    pak,rescan
+
+; to be here we have at least 64 sectors
+; *R2 still points to max sectors
+; R12 still points to base cru
+;
+; floppyonly set if sectors <3200
+;
+OPTF4A BLWP @TTYOUT      Format F/H/B
+       DATA FORMT4A,0
+
+       ABS  @FLOPPYONLY  floppy only?
+       JEQ  OPTF4BOTH    no
+       BLWP @TTYOUT      yes, show the special option #4
+       DATA FORMT4AA,0
+       JMP  OPTF4B       and SKIP ramhd selection
+
+OPTF4BOTH
+       BLWP @TTYOUT      allow ramhd option 0
+       DATA FORMT4A0,0
+
+OPTF4B LI   R0,4
+OPTF4C XOP  @KEY,0
+       JNE  OPTF4C
+       CI   R1,'1'*256   1=1440
+       JNE  OPTF42
+       C    @MAXSECTORS,@D1436
+       JL   OPTFBAD
+       LI   R5,1440
+       JMP  OPTF5
+
+OPTF42 CI   R1,'2'*256   2=1600
+       JNE  OPTF43
+       C    @MAXSECTORS,@D1596
+       JL   OPTFBAD
+       LI   R5,1600
+       JMP  OPTF5
+OPTF43 CI   R1,'3'*256   3=3200
+       JNE  OPTF44
+       C    @MAXSECTORS,@D3196
+       JL   OPTFBAD
+       LI   R5,3200
+       JMP  OPTF5
+
+OPTFBAD
+       BLWP @TTYOUT
+       DATA FORMT4BAD,0       ;sorry, not enough sectors for selection
+       JMP  OPTF4A            ;present error and selection again
+
+;7.6.2021
+OPTF44 ABS  @FLOPPYONLY  floppy only?
+       JEQ  OPTF40       no, skip this option and allow ramhd
+
+;we adjust max count by -4 IFF <<3200 sectors and option 4 selected
+          CI   R1,'4'*256
+          JNE  OPTF4C       rescan; don't allow ramhd if floppy only set
+          MOV  @MAXSECTORS,R5    get max
+          AI   R5,-4             and adjust -4 to account for format!
+          JMP  OPTF5
+
+OPTF40 CI   R1,'0'*256   0=none
+       JNE  OPTF4C
+       CLR  R5           ;0 sectors
+
+;Format floppy; R5=sectors
+OPTF5
+       MOV  R5,@L#F#PART   store floppy partition count
+
+; Hard drive partition ALWAYS includes +2 sector separation
+       MOV  R5,@L#H#PART   harddrive partition start
+       INCT @L#H#PART      increase separation by 2 sectors
+
+;$$ 7.22, what if max=< R5? negative number and problem...$$$$
+;$$       Add a boundary test here?
+;
+       MOV  @MAXSECTORS,R6
+       S    R5,R6        R6-R5=R6 [max-floppypartition]
+       DECT R6           Adjust size for 2 sector separation
+       MOV  R6,@L#H#SIZE and save it for later
+
+       C    R6,@D800     ramhd partition >100?
+       JH   OPTF5R       yea, we are ok
+       SETO @FLOPPYONLY  no, disable ramhd
+
+OPTF5R ABS  @FLOPPYONLY       floppy only?
+       JEQ  OPTCNF            no,allow ramhd
+
+       CLR  @L#H#SIZE         yes, CLEAR ramhd partition  (what will OS do?)
+       CLR  R6                "              "
+
+       BLWP @TTYOUT      ;tell user no Ramhd partition possible/available
+       DATA FORMNORHD,0
+
+;display and prompt user to proceed
+OPTCNF MOV  R5,R0
+       BL   @NUMASC      show DSK size
+       DATA FORM4CF+30
+
+       MOV  R6,R0
+       BL   @NUMASC      show hard partition size
+       DATA FORM4CH+30    ;hard
+
+       SBZ  0            no chances w/sound xop...CARD OFF now
+
+       BLWP @BEEPH       ;sound!
+
+       BLWP @TTYOUT      confirm one more time
+       DATA FORM4C,0
+
+OPTF5Q
+       LIMI 1
+       LIMI 0
+       BLWP @GETKEY
+       ANDI R1,>5F00
+       CI   R1,>0C00    ;'Y'*256   yes!
+       JEQ  OPTF6
+       CI   R1,>1B00    ;'N'*256
+       JNE  OPTF5Q
+
+       SBZ  0            no, abort; turn off card and rescan
+       B    @RESCAN
+
+OPTF6
+;set up the special header info at >4000
+       MOV  @FORMCRU,R12
+       SBO  0                 turn card back on!
+       MOV  @H9901,@FLAG7
+       MOV  @L#F#PART,@F#PART
+       MOV  @L#H#PART,@H#PART
+       MOV  @L#H#SIZE,@H#SIZE
+       MOV  @FORMCRU,@CRU
+       CLR  @OPEN1
+       CLR  @OPEN2
+
+; Now copy the header stub
+;      ROS8K:ROS8KEND to: >4000
+
+       LI   R0,ROS8K
+       LI   R1,>4000     better hope BA is in place!
+STUBB1 MOVB *R0+,*R1+
+       CI   R0,ROS8KEND
+       JLE  STUBB1
+
+       BL   @CLRVIB      clear VIB
+
+; Disk partition
+;  -first, clear the VIB and FDIR in case there is no DSK selection
+;  -then determine whether or not to set up the VIB
+;
+       CLR  R0           0=write
+       CLR  R3           clear VIB
+       LI   R8,VIBBUF+256
+       BLWP @RAMDSK
+
+       CLR  R0           0=write
+       LI   R3,1         clear Sec1
+       LI   R8,VIBBUF+256
+       BLWP @RAMDSK      clear sector 1
+
+       MOV  R5,R1        DSK partition requested?????
+       JEQ  OPTF6NODSK   no [above two sector writes ensures old part gone!]
+       BLWP @TTYOUT      yes, tell user we are formatting it
+       DATA FORMT5,0
+       MOV  @FORMCRU,R12
+
+       BLWP @VIBSET      ;R1=allocated sectors
+       CLR  R0
+       BLWP @AUFSET      ;buffered
+       INC  R0
+       BLWP @AUFSET      ;buffered
+
+;
+; Special case for 1440 disk  {fails for arbitrary size}
+;
+; 7.22.2021:
+; in theory, we can loop from R1(allocated) to max(tricky)
+;
+;      R5,R1=allocated sectors
+;      R0=sector to mark as 'used'
+;
+;      1600-all open
+;      R3: set to max capacity (1600,3200)
+;
+;      R3=1600
+;      If R5>1600,then R3=3200 [assume 3200 max]
+;      R0=R5
+;      if R0>r3 then exit else set bitmap::r0=r0+1
+;
+; TEST Code to replace below routine
+;      li   r3,1600      max possible loop 1600
+;      c    r5,@D1600    did we have >1600 allocated?
+;      jle  setv11       no
+;      li   r3,3200      yes, max possible loop now 3200
+;setv11 mov  r5,r0        ;sector # to mark as used (via aufset)
+;      mov  r5,r1        ;aufset uses r1 to calculate sec/AU in bitmap
+;setv12 c    r0,r3        have we reached the max possible(not max alloc'd)
+;      jhe  setvend      yep. done
+;      blwp @aufset      no, allocate it
+;      inc  r0           and loop for
+;      jmp  setv12       next sector
+;
+;setvend     ;done, theoretically, the bitmap is now marked.
+;
+
+       MOV  R5,R0
+FUSTET CI   R0,1600      check sector #
+       JHE  USEALL       >=1600, don't allocate
+
+       BLWP @AUFSET      this way, for 1440, we set the allocation bits
+       INC  R0           and loop til done
+       JMP  FUSTET
+
+USEALL
+       CLR  R0           0=WRITE
+       CLR  R3           sector 0
+       LI   R8,VIBBUF    dsk VIB
+       BLWP @RAMDSK      write it
+
+       CLR  R0           Duplicated, probably can delete
+       LI   R3,1
+       LI   R8,VIBBUF+256
+       BLWP @RAMDSK      clear sector 1
+       JMP  OPTF6HD      set up extended partition!
+; we should also set sectors at end of bitmap here;fix later
+
+
+OPTF6NODSK               ;no additional action at this time
+
+; Extended RamHD partition
+OPTF6HD                  ;HARD DRIVE
+       ABS  @FLOPPYONLY  0=both
+       JEQ  OPTF6HE
+       JMP  OPTF6COMPLETE   ;<>0, skip hard drive!
+
+OPTF6HE
+       BLWP @TTYOUT      Formatting hd partition
+       DATA FORMT6,0
+
+; Must copy the sectors to the right place since our routines are not
+;      directly accessing the ramdisk at this time
+;      1. floppy VIB
+;      2. hard drive VIB+bitmap sectors [copy to >20-3f?]
+;      3. Clear floppy sector 1, hard sector >40
+;
+
+; Harddrive partition:
+; (r0/r1 not implemented yet)
+       MOV  @L#H#PART,R0      physical offset; sector 0 of this partition
+       MOV  @L#H#SIZE,R1      total sectors
+       BLWP @BIGSET           now set the VIB and Bitmap
+
+; Hardcoded offset removed for MDOS 7.30 release
+
+       MOV  @L#H#PART,R3 physical offset sector 0
+       LI   R8,VIBBUF
+       LI   R2,32        sectors 0-31
+OPTF6C CLR  R0           0=WRITE
+       BLWP @RAMDSK
+       AI   R8,256       next sector in buffer
+       INC  R3           next sector on ramdisk
+       DEC  R2
+       JNE  OPTF6C
+
+       BL   @CLRVIB      Clear the buffer
+
+;      CLR  R0
+;      MOV  @L#H#PART,R3
+;      AI   R3,>0040     Reset FDR
+;      LI   R8,VIBBUF         recycle
+;      BLWP @RAMDSK
+
+       MOV  @L#H#PART,R3      get HD partition starting sector
+       AI   R3,>20            point to bitmap copy (>20)
+OPTF6G CLR  R0          WRT   and clear it straight through to sector >40
+       LI   R8,VIBBUF         re-use VIB, cleared above
+       BLWP @RAMDSK           WRITE IT
+       INC  R3                next sector
+       CI   R3,>41            clear >40 FDIR for VIB
+       JL   OPTF6G
+
+OPTF6COMPLETE
+       SBZ 0             turn OFF card
+
+       BLWP @TTYOUT      format complete
+       DATA FORMT7,0
+
+       BLWP @BEEPL
+       B    @RESCAN
+;      B    @WAIT4KEY    press any key
+
+OPTF6R BLWP @TTYOUT      for later
+       DATA FORMERR,0
+       B    @WAIT4KEY
+
+;We could in theory deduce floppy from hard start; let's just play safe.
+L#F#PART  DATA 0          0=none;<>0 floppy partition size
+L#H#PART  DATA 0          0=none;<>0 ramhard partition start
+L#H#SIZE  DATA 0          hd partition size (from formatter)
+
+CRUDISP     TEXT '  >1'
+CRUDISPX    TEXT 'x00 selected'
+            BYTE 0
+
+BOOTT1      BYTE 13,10,10
+            TEXT '<ESC> or Toggle Boot for CRU >1x00: '
+            BYTE 0
+BOOTT2      BYTE 13,10
+            TEXT 'No Bootable Ramdisk - Press any key'
+            BYTE 0
+
+IDENTX1     BYTE 13,10,10
+            TEXT '<ESC> or select the ramdisk CRU to Identify (>1x00): '
+            BYTE 0
+IDENTX2     BYTE 13,10,10
+            TEXT 'Card enabled - check LED - press a key to rescan'
+            BYTE 13,10,0
+
+
+FORMT1      BYTE 13,10,10
+            TEXT '<ESC> or select the CRU to format (>1x00): '
+            BYTE 0
+
+FORMT2      BYTE 13,10
+            TEXT 'Unable to Format - press any key'
+            BYTE 0
+
+FORMT3      BYTE 13,10,10
+            TEXT 'WARNING: Ramdisk data/header detected - proceed? Y/N'
+            BYTE 0
+
+FORMT4A     BYTE 13,10,10
+            TEXT 'Reserve a bootable RamDSK partition on this ramdisk ?'
+            BYTE 13,10
+            TEXT '  1) 1440 sectors'
+            BYTE 13,10
+            TEXT '  2) 1600 Sectors'
+            BYTE 13,10
+            TEXT '  3) 3200 Sectors'
+            BYTE 0
+
+FORMT4AA    BYTE 13,10
+            TEXT '  4) Use all available up to 3200 (no RamHD)'
+            BYTE 0
+
+FORMT4A0    BYTE 13,10
+            TEXT '  0) NONE - assign all available sectors to RamHD'
+            BYTE 13,10,10
+            TEXT 'Choice : '
+            BYTE 0
+
+FORMT4B     BYTE 13,10
+            TEXT 'Fewer than 64 sectors; format not possible. Press any key'
+            BYTE 0
+FORMT4BAD   BYTE 13,10,10
+            TEXT '**Insufficient space - select another option'
+            BYTE 13,10,0
+
+
+FORMNORHD   BYTE 13,10
+            TEXT 'Warning: insufficient space for a RamHD partition'
+            BYTE 13,10,0
+
+FORM4C      BYTE 13,10,10                       ;30
+FORM4CF     TEXT 'Reserved DSK partition:         sectors'
+            BYTE 13,10                          ;30
+FORM4CH     TEXT 'Extended RamHD partition:       sectors'
+            BYTE 13,10,10
+            TEXT '*ALL EXISTING PARTITIONS WILL BE OVERWRITTEN*'
+            BYTE 13,10,10
+            TEXT 'Press FCTN-6 to format or ESC to abort'
+            BYTE 0
+
+FORMT5      BYTE 13,10
+            TEXT 'Formatting DSK partition...'
+            BYTE 0
+
+FORMT6      BYTE 13,10
+            TEXT 'Formatting Extended RamHD partition...'
+            BYTE 0
+FORMT7      BYTE 13,10
+            TEXT '--Format Complete.'
+            BYTE 0
+
+FORMERR     BYTE 13,10,10
+            TEXT 'Format Error! Unknown condition!'
+            BYTE 13,10,0
+
+       DATA 0            safety first!
+
+;-----------
+; BL @CFG2
+; Out: TABLE of ramdisk devices
+;      Display all identified cards
+;
+; Builds table of devices (R13) which is scanned by other options
+;
+
+CFG2R11 DATA 0
+
+CFG2   MOV  R11,@CFG2R11
+       LI   R12,>1000
+       LI   R13,TABLE
+;
+; FINDSR modifies R1 as part of the detection scheme
+; R1 is a pointer to the device name display table (16 bytes per entry)
+;
+; This process comes directly from the TI version of CFG
+;
+NXTCRD LI   R1,4
+       BL   @FINDSR
+       DATA >8,TIPI1,ENDCHK   #4 TIPI device
+
+       BL   @FINDSR
+       DATA >8,SCSCRD,ENDCHK  #5  scsi
+
+       BL   @FINDSR
+       DATA >8,IDECRD,ENDCHK  #6  ide
+
+       BL   @FINDSR
+       DATA >A,WDSCRD,ENDCHK  #7  hfdc, modif
+
+       BL   @FINDSR
+       DATA >A,BWG99,ENDCHK   #8 check for BWG first (SPT16)
+
+       BL   @FINDSR
+       DATA >A,MYCTR,ENDCHK    #9 Floppy Ctrl - CALL FILES
+
+       BL   @FINDSR
+       DATA >A,CTRLER,ENDCHK  #10 Floppy Ctrl - CALL FILES
+
+       BL   @FINDSR
+       DATA >8,HDX1,ENDCHK    #11 HDX/RS232
+
+       BL   @FINDSR
+       DATA >8,RS232,ENDCHK   #12 RS232/PIO
+
+       BL  @FINDSR
+       DATA >8,PERWDS,ENDCHK  ;13   ;#26 Personality Card (ruled
+
+;;;    B    @NOPRNT      ;7.20.debug! skip ramdisk completely
+
+;-Checked ROMs, now check for Horizons:
+
+       CLR  R1           0==undefined
+
+;7.20.2021, limit to physical hardware! Ramdisk CRU >1000 to >1700
+
+       CI   R12,>1700    beyond hardware address limitations?
+       JH   UNDEF1       yes, skip detection!
+
+       LI   R2,>5800
+       LI   R3,>5AA5
+       LI   R4,>0909
+       LI   R5,>8001
+       LI   R6,>0101
+       LI   R7,>0001
+       LDCR R7,0              Turn on the card to be tested
+       SBO  0                 Incase of a 8 bit CRU decoder
+       MOV  *R2,R0            Save the test area of memory
+       MOV  R3,*R2            Write the test value of >5AA5
+       C    *R2,R3            Check if data has been written
+       JNE  CHKEND            Nope, so card is not an HORIZON
+
+       LDCR R4,8              Try to select a different 2K page
+       C    *R2,R3            Check if data has changed
+       JEQ  CHKEND            Nope, so card is not an HORIZON
+
+       LDCR R6,8              Switch back to old 2K page
+       C    *R2,R3            Check if data has changed back
+       JNE  CHKEND            Nope, so card is not an HORIZON
+
+       INC  R1            HORIZON 8K or 32K or RAMBO
+       LDCR R7,0              Check if HORIZON is 8K*8 or 32K*8
+       C    *R2,R3            Check if data hap changed
+       JNE  CHKEND            Yes,  so card is an  8K*8 HORIZON
+
+       INC  R1            HORIZON 32K or RAMBO/HORIZON
+       LDCR R5,0              Try to select the 8K page mode
+       C    *R2,R3            Check if data has changed
+       JEQ  CHKEND            Nope, so card is an 32K*8 HORIZON
+
+       INC  R1            RAMBO/HORIZON, Yes,
+CHKEND LDCR R7,0              SWITCH BACK TO 2K MODE!
+       SBO  0
+       MOV  R0,*R2            RESTORE VALUE
+       MOV  R1,R1        0=undef
+       JNE  ENDCHK
+
+;=======================================================================
+; Ramdisk check happens after the 'normal' devices are complete.
+; R1 is no longer incremented; it is instead loaded immediately
+; for these following devices.
+;
+; Thus.. R1 should be 0 or "unknown" at this stage
+
+UNDEF1 LI   R2,>400E   ;undefined?
+       MOV  *R2,R0
+       MOV  R3,*R2
+       C    R3,*R2            rom?
+       JNE  THEND             yes. #0  "UNDEFINED"
+       LI   R1,CUNK      ;14  "UNKNOWN"       6.07.2017
+THEND  MOV  R0,*R2       ;restore *r2 from UNDEF test above
+
+; Once found, most tests arrive here.
+; If R1<>0 we display the derived card
+; If R1=0, then we test for a DSR header. If not found we skip display entirely.
+;
+ENDCHK SBO  0            turn on card again
+       MOV  R1,R3             SAVE POINTER
+       JNE  CARDOK            A HORIZON SO CARD IS OK
+       CB   @>4000,@DSRHDR    CHECK FOR NO CARD OR NON-HORIZON
+       JNE  NOPRNT            NO SCREEN DISPLAY
+
+CARDOK BL   @CRDSET      ;returns R2=display len
+       LI   R1,CARDLN    ;r14 is the VDP counter for ti mode
+       MOV  R2,@DISPLN
+
+       BLWP @TTYOUT      Display for the user via MDOS XOP
+       DATA CARDLN
+DISPLN DATA 40           set by R2 in  CARDLN routine
+
+       BLWP @TTYOUT
+       DATA CRLF2,2
+
+NOPRNT SBZ  0
+       AI   R12,>0100
+       CI   R12,>1E00         halt when we reach Geneve CRU >1E00
+;;     JEQ  CRUK2
+       JEQ  DETPFM
+       B  @NXTCRD
+
+;
+; check PFM; display only 4-4-2021
+;
+;;;DETPFM JMP CRUK2         7.20.2021 debug for CorComp
+
+DETPFM BL   @PRODID      detect PFM device
+       MOV  R0,R0
+       JEQ  CRUK2
+
+       BLWP @TTYOUT
+       DATA PFMTX1,0      keep it simple; just show text
+
+       MOV  @PFM_TEXT,@TTXX
+       BLWP @TTYOUT
+TTXX   DATA 0,0
+
+       BLWP @TTYOUT
+       DATA CRLF2,2
+;end pfm
+
+CRUK2  MOV  @CFG2R11,R11
+       RT
+
+;------CFG2 complete^^^
+
+SAV400 BYTE >00
+HBA    BYTE >BA
+
+PFMTX1 TEXT '> --- '     ;for display only
+       BYTE 0
+
+       DATA 0
+******************************
+* CALC MEMORY SIZE/USED/PROG *
+******************************
+; R1 - The entry in the list of names. Each name is 16 bytes long
+
+CRDSET MOV  R11,@CARDRT+2     R1 AND R3 CONTAIN TYPE OF CARD!
+
+       SBO  0
+CRDSG1 SLA  R1,4       ; x16 to point to the proper name
+       LI   R0,CARDLN+1
+       AI   R1,NAMES
+       LI   R2,14
+
+       MOV  R12,R4            ;display CRU
+       SRL  R4,12
+       MOVB @HEX(R4),*R0+
+       MOV  R12,R4
+       SLA  R4,4
+       SRL  R4,12
+       MOVB @HEX(R4),*R0+
+       AI   R0,3
+MOVNAM MOVB *R1+,*R0+
+       DEC  R2
+       JNE  MOVNAM
+
+       LI   R7,' Y'           ;Yes
+       CLR  @VALID
+
+; we should look for flag for geneve format here
+; for now, set "*" if we find >AA
+;
+       C    @>4000,@DS9640    9640 header?
+       JNE  TBOOT1            no
+       LI   R7,'N '           'No' ramdisk is formatted but NOT bootable
+       JMP  NOSOFT
+
+
+TBOOT1 C    @>4000,@DSRHDR    RAmdisk DSR present?
+       JNE  NOSOFT            no
+       SETO @VALID            Yes, flag, bootable
+
+       SWPB R7                and display a "*"
+NOSOFT INC  R0
+       MOVB R7,*R0+
+       CLR  R15
+       CI   R3,1         Does testing/display based
+       JEQ  TST8K        on the card detected!
+       CI   R3,2
+       JEQ  TST32K
+       CI   R3,3
+       JEQ  TSTRAM
+       LI   R2,22        ;display up to end of dev name
+CARDRT B    @>0000
+
+SET8K  SWPB R6          *     Swap bytes for 8 bit CRU
+SET32K NOP              *     No swaping needed for 16 bit CRU
+
+TSTSET MOV  R0,R6             Save page # for next loop of tester
+       SLA  R6,1              Calc CRU page value for this page
+       INC  R6                2K >5800 PAGE MODE ON and 6K DSR ON
+TSTPAG DATA >0000        *    Moved SWPB or NOP for pager
+       LDCR R6,0              Select very first page
+       RT                     RETURN TO TESTER PROGRAM
+
+TST8K  LI   R1,SET8K      *   START OF 8K*8 HORIZON TEST
+       LI   R0,3              Skip over nondecoded pages
+       JMP  TSTDSK            Jump to the common TEST code
+*
+TSTRAM
+TST32K LI   R1,SET32K     *   START OF 32K*8 HORIZON TEST
+       CLR  R0                Start at very first page
+
+TSTDSK MOV  *R1,@TSTPAG    *  START OF COMMON TEST CODE
+       BL   @TSTSET           Set page # and turn Horizon On!
+       MOV  R6,R7             Save CRU value for Ping-Pong test
+
+       MOV  R12,*R13+         Store this card's CRU in TABLE
+       MOV  R3,*R13+          Store type of Horizon in TABLE
+       CLR  R5                Clear count of pages
+
+       LI   R1,>5800          Address of the WORD to be tested
+       LI   R3,>ABCD          Ping-Pong TEST value setup
+       MOV  *R1,R8            REMEMBER WHAT WAS THERE!
+       MOV  R3,*R1            Store our special TEST value
+       C    R3,*R1            Check to see if it got stored
+       JNE  TSTDK             Nope, so Horizon has 0K onboard!
+       LI   R3,>0123          Use a different test value now!
+       INC  R5                One good page known, so count it
+
+NXTRAM INC  R0                Start at the next page
+       BL   @TSTSET           Set Page # and turn HORIZON on!
+       MOV  *R1,R4            REMEMBER WHAT WAS THERE!
+       MOV  R3,*R1            Store our normal TEST value
+       C    R3,*R1            Check to see if it got stored
+       JNE  TSTOP             Nope, so STOP THE TEST
+
+       LDCR R7,0              Ping-Pong back to the first page
+       SBO  0                 Just incase we are in 8 bit mode
+       C    R3,*R1            Check to see if >ABCD still there
+       JEQ  TSTOP             Nope, so STOP THE TEST
+
+       LDCR R6,0              Set Page # and turn HORIZON on!
+       MOV  R4,*R1            RESTORE THE PAGE DATA!
+       INC  R5                Another page found, so count it
+       JMP  NXTRAM
+
+TSTOP  LDCR R7,0              Ping-Pong back to the first page
+       SBO  0                 Just incase we are in 8 bit mode
+       MOV  R8,*R1            RESTORE THE PAGE DATA!
+
+;     R5=pages; R3=sectors
+;
+TSTDK  MOV  R5,R0             Save the number of pages for later
+       SLA  R0,1              Convert count into TOTAL K onboard
+       MOV  R0,R3             Save TOTAL K value for DISPLAY
+       JEQ  TSTDK4            If no RAM onboard then use as is!
+       DECT R3                Otherwise don't count the first 2K!
+TSTDK4 SLA  R3,2              Calc number of sectors on this card
+       MOV  R3,@MSEC          Save TOTAL SECTORS for DISPLAY
+
+       MOV  R3,*R13+     3rd entry in TABLE
+
+;;     MOV  R3,R0        test,display sector count?
+
+       BL   @NUMASC           Write the TOTAL K value
+       DATA CARDLN+27   ;26   ADDRESS OFFSET FOR SCREEN POSITION
+
+       C    @V7FLAG,@H9901    ;v7 header?
+       JNE  TSTDK3
+
+;      ABS  @VALID            Check if ROS 8.1 is installed
+;      JEQ  TSTDK3            If no ROS 8.1 then print 0K values
+
+       MOV  @V7FLOP,R0        display floppy allocation
+       BL   @NUMASC
+       DATA CARDLN+36
+
+       MOV  @V7HSIZ,R0
+       BL   @NUMASC
+       DATA CARDLN+46    ;44
+
+TSTDK3 LI   R0,>1200     ;test 2-20
+;      BL   @NUMASC           Prite the TOTAL RAMDISK value
+;      DATA CARDLN+49    ;32  ADDRESS OFFSET FOR SCREEN POSITION
+
+
+; finish, turn off card, return to loop
+       CLR  R6                CRU value to turn everything off!
+       LDCR R6,0              SHUT DOWN THE SYSTEM please!
+       LI   R2,50    ;40      Display on screen the whole line
+       B    @CARDRT           Done, so loop back for another card!
+
+
+************************
+* FIND A DSR NAME/CALL *
+************************
+FINDSR SBO  0
+       LI   R2,>4000
+       A    *R11+,R2
+       MOV  *R11+,R3
+       MOV  *R11+,@FINDOK+2
+       CB   @>4000,@DSRHDR
+       JNE  ENDSR
+LNKDSR MOV  *R2,R2
+       JEQ  ENDSR
+       MOV  R3,R4
+       MOV  R2,R0
+       C    *R0+,*R0+
+       MOVB *R4,R5
+       SRL  R5,8
+       INC  R5
+CHKDSR CB   *R0+,*R4+
+       JNE  LNKDSR
+       DEC  R5
+       JNE  CHKDSR
+FINDOK LI   R11,>0000
+       DEC  R1
+ENDSR  SBZ  0
+       INC  R1
+       RT
+
+***************************
+* CONVERT NUMBER TO ASCII *
+***************************
+* 3/21/2014 - DISPLAY 4 CHARACTERS
+NUMASC MOV  *R11+,R1
+*       LI   R2,4
+       LI   R2,5              3/21
+       MOV  R0,R4
+       JMP  NUMASE
+NUMASD MOV  R3,R4
+       JEQ  NUMASF
+NUMASE CLR  R3
+       DIV  @DECTEN,R3
+       JNO  NUMASI
+NUMASF MOVB @SPACE,*R1
+NUMASH DEC  R1
+       DEC  R2
+       JNE  NUMASD
+       RT
+NUMASI A    @HEX30,R4
+       SLA  R4,8
+       MOVB R4,*R1
+       JMP  NUMASH
+
+GETKEY DATA >F020,$+2
+       LI   R0,4
+GETKE1 XOP  @KEY,0
+       JEQ  GETKE1
+       MOV  R1,@2(R13)
+       RTWP
+
+TTYOUT DATA >F020,$+2
+       MOV  *R14+,R8
+       MOV  *R14+,R9
+       MOV  R9,R2
+       LI   R10,WORK
+       MOV  R10,R1
+TTY1   MOVB *R8+,*R10+
+       JEQ  TTY2
+       DEC  R9
+       JNE  TTY1
+TTY2   LI   R0,>27
+       XOP  @VIDEO,0
+       RTWP
+
+KEY    DATA 5
+VIDEO  DATA 6
+WORK   BSS 400           ttyout buffer
+;
+       DATA 0
+
+; Each name is 16 bytes because in CRDSET, the address of the text
+; is calculated by shifting R1 4 bits left (x16).
+; The DSRFND routine adjusts R1 when a name is found/not found.
+;
+
+NAMES  TEXT 'UNDEFINABLE     '  ;0
+       TEXT 'Horizon-8 bit   '  ;1
+*      TEXT '32K*8 HORIZON   '  ;2
+*      TEXT '32Kor128K HRD   '  ;2  * Ros8.14F modification
+       TEXT 'Horizon-16 bit  '  ;2            3.3.2012
+       TEXT 'Horizon-16 bit  '  ;3   rambo
+
+       TEXT 'TIPI Device     ' ;4   5.07.2017
+       TEXT 'SCSI Card       ' ;5
+       TEXT 'IDE Card        ' ;6
+       TEXT 'Myarc HFDC      ' ;7    Change to >25 subroutine
+       TEXT 'BwG Disk Cntr   ' ;8
+       TEXT 'Floppy Cntrlr   ' ;9  check for "LLR" CALL (Myarc or CC MG future)
+       TEXT 'Floppy Cntrlr   ' ;10 future check for DSK4 (ti only has 3)
+       TEXT 'HDX1/RS232      ' ;11
+       TEXT 'RS232 and PIO   ' ;12
+       TEXT 'WDSPersonality  ' ;13   26  "WDS1"
+       TEXT 'UNKNOWN CARD    ' ;14
+
+CUNK   EQU  14
+
+; End of device text
+
+HEX    TEXT '0123456789ABCDEF'
+ULINE  TEXT '--------'
+
+* Modified order 3.3.2012 to account for hard drive devices w/DSKx
+*
+TIPI1  BYTE 4
+       TEXT 'TIPI'     ;4 TIPI, must preceed all controllers due to DSK1 entry
+SCSCRD BYTE 4            ;5
+       TEXT 'SCS1'
+IDECRD BYTE 4            ;6
+       TEXT 'IDE1'
+WDSCRD BYTE 1   ;7  HFDC - Use level 2 to distinguish w/Personality #25
+       BYTE >25
+BWG99  BYTE 5            ;8    BWG Floppy Controller
+       TEXT '16SPT'
+MYCTR  BYTE 3
+       TEXT 'LLR'    ; 9 , Myarc Floppy controller
+CTRLER BYTE 5            ;10, other floppy controllers
+       TEXT 'FILES'
+HDX1   BYTE 4            ;11
+       TEXT 'HDX1'
+RS232  BYTE 5            ;12
+       TEXT 'RS232'
+PERWDS BYTE 4      ;2-23-2020
+       TEXT 'WDS1'   ;13   26 Personality Card; Assume HFDC/SCSI found earlier
+;
+       BYTE 0
+       DATA 0
+       EVEN
+
+CRLF2  BYTE 13,10,0
+TITLE  BYTE 13,10,10
+       TEXT 'GENCFG v1.3a  [20 July 2021 Insane Multitasker]'
+;;     BYTE 13,10
+;;     TEXT '<<<<< CorComp Debug >>>>'
+       BYTE 13,10,10
+;      TEXT '                              Sectors   Sectors '
+;      BYTE 13,10
+       TEXT 'CRU   PERIPHERAL     B   Size  RamDSK     RamHD'
+       BYTE 13,10
+;                                2         3         4         5
+;            012345678901234567890123456789012345678901234567890
+       TEXT '----- -------------- - ------  ------    ------    '
+       BYTE 13,10,0
+
+CARDLN TEXT '>__00 ______________       _K                      '
+VALID  DATA 0
+SPACE  DATA >2000
+DECTEN DATA 10
+MSEC   DATA 0            ;max sectors
+DSRHDR DATA >AA06        ;06 for ramdisk for now
+DS9640 DATA >9640        ;ramdisk, not bootable
+HEX30  DATA >0030
+
+TABLE  BSS  66           <CRU><Type><MaxSectors> 6*8 slots=48 bytes
+
+;following equates should be moved to STUBS in the future:
+H9901  DATA >9901        FLAG FOR V7 FORMAT
+V7FLAG EQU  >4010        ;9901=V7
+V7FLOP EQU  >4012        ;0 NO floppy partition; Sectors allocated
+V7HPRT EQU  >4014        ;0 NO hrd partition; start sector
+V7HSIZ EQU  >4016        ;0 NO hrd partition; sectors allocated
+V7CRU  EQU  >4018
+
+;end
+

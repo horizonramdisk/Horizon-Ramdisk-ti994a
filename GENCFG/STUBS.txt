@@ -1,0 +1,83 @@
+* File: STUBS
+*
+* Horizon RAMdisk Boot Stub v0.4   2014Sept20 - T.Tesch
+*
+* 3.30.2018 Reconfigured table for partition information, MDOS 7.0 will
+*           need to check this at startup or first access to determine
+*           the hard ramdisk partition starting sector
+* 9.30.2018 Calculated routine address as 4034, should have been 4036.
+*
+* 3.20.2021 Fixed error in lvl3 fake routine; wrong subroutine address
+*           In theory, the return should pass to next device
+*
+* Goals:
+*      1. Eliminate inconvenient and unneeded ROS 6.0 routines from the RAMdisk
+*         format & EPROM boot routines.
+*      2. Implement future device emulation and simplify validation.
+*      3. Provide backward compatibility
+*
+*      The Geneve BOOT EPROM queries each card to find a bootable RAMdisk.
+*      Since v0.98 and beyond do not require the DSR routines, we can set up
+*      a "stub" so the EPROM can:
+*           - Test for "HD" level 3 name     (legacy)
+*           - Test for "0110" level 2 routine  (legacy)
+*
+*      The Geneve OS is capable of using the RAMdisk as a hard drive once
+*      properly formatted. This stub will further allow us to boot from that
+*      RAMdisk with or without a separate emulated "floppy" on the same card
+*      provided we implement LOAD/SYS for the hard ramdrive.
+*
+*      Geneve EPROM boots ONLY if >4000 contains a valid header (>AA) and
+*      valid DSR table entries. The 0.98 and 1.00 EPROM use their own
+*      low level routine
+*           Bootable:  >AA0x
+*        nonbootable:  >9640
+*
+*      Future EPROMs may check address >4010 for flag >9901, which signifies
+*      the newer format with disk and/or ramHD partition.
+*
+* This stub is copied to the ramdisk 8k/32k SRAM
+*
+ROS8K  DATA >AA06   4000 valid|ver OR >9640 (no boot)
+       DATA 0       4002 not used
+       DATA 0       4004 powerup        >0000              '..'           4004
+       DATA 0       4006 not used       >0000              '..'           4006
+       DATA >402C   4008 level 3 table  >480A,>551A        'H.U.'         4008
+       DATA >401E   400a level 2 table
+       DATA 0       400c usr int
+       DATA 0       400e
+*
+* New configuration table for partition and boot information
+*
+FLAG7  DATA >9901   4010 Special flag to indicate ramdisk 7.0 format
+F#PART DATA >0000   4012 0=no floppy partition; <>0 floppy size
+H#PART DATA >0000   4014 0=no hard partition; <>0 partition START sector
+H#SIZE DATA >0000   4016 0=no hard partition; <>0 partition size
+CRU    DATA >0000   4018 CRU of this ramdisk for comparison later
+OPEN1  DATA 0       401A reserved
+OPEN2  DATA 0       401C reserved
+*
+* The device tables will only be needed for backward compatibility.
+*
+* LEVEL 2 IO table
+*
+LEV2   DATA >4024  401e  next routine    (HARD1)
+       DATA >4036  4020  subroutine loc  (FAKE)
+       DATA >0110  4022  sub name
+HARD1  DATA 0      4024  no more routines
+       DATA >4036  4026                  (FAKE)
+       DATA >0160  4028   HARD RAMDISK NEW OPCODE to avoid selecting wrong card
+       DATA 0      402a
+*
+* Level 3 IO table
+*
+LEV3   DATA 0      402c  no other entries
+       DATA >4036  402e  routine      (FAKE) ;4036! not 4034!
+       BYTE >02,'H','D',0  4030
+       DATA 0      4034
+*
+* Fake routine, just in case
+*
+FAKE   RT          4036  Return to caller; no routine; pass to next dev
+       DATA 0
+ROS8KEND EQU $
