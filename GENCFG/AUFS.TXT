@@ -1,0 +1,228 @@
+; File:  AUFS, routines for floppy/ramHD VIB and bitmap setup
+; GenCFG, T.Tesch
+;
+; 8K buffer reserved at the end of this file. Upon maturation, replae the
+;      BSS with a system call for 8k page; this will reduce the program size
+;      considerably.
+;
+; 3.30.2021 OK for release
+;
+
+;-----------------------------------------
+; BLWP @AUFSET
+; Input: R0=sector# to claim
+;        R1=Maximum sector number on disk (as set in VIB)
+;
+; Output: R1=0 OK;  R1<>0 error
+;
+D1600  DATA 1600
+D3200  DATA 3200         "quad" density
+D6400  DATA 6400         "high" density
+
+AUWS   BSS >20
+AUFSET DATA AUWS,$+2
+
+       MOV  *R13,R0      requested sector
+       MOV  @2(R13),R9   tot sectors in VIB
+
+; Adjust for sectors/AU based on max sectors
+       C    R9,@D1600    ;tot>1600?
+       JLE  OFF1         ;no, 1sec/AU
+       SRL  R0,1         ;yes,2sec/AU now
+
+       C    R9,@D3200    ;tot>3200
+       JLE  OFF1         ;no,
+       SRL  R0,1         ;yes, high density, 4sec/AU
+
+       C    @D6400,R9    ;tot>6400?
+       JLE  OFF1
+       SRL  R0,1         yes, ultra high density,8sec/AU
+
+; Get the proper bitmap byte and bit to set
+OFF1   MOV  R0,R7        transform adjusted sector to
+       SRL  R7,3         byte offset in bitmap [see off2]
+
+       LI   R8,>0100     set bit mask
+       ANDI R0,>0007     mask adjusted sector MOD 8 to get bit to set
+       JEQ  OFF2         0? don't shift
+       SLA  R8,0         <>0, shift based on R0 mask
+OFF2
+       SOCB R8,@VIBBUF+56(R7)    Set the proper bit to 1!
+       RTWP
+
+;-------------
+;   BLWP @VIBSET
+;   R1=total sectors formatted
+;
+LABEL1 TEXT 'RAMDSK'
+LABEL2 TEXT '1401'       ;cru text, set by :CONCRU
+PARM1  TEXT '$DSK'       ;0c-0f
+PARM2  DATA >2028,>0202  ;10-13   ;set in-line below
+
+
+VIBSET DATA AUWS,$+2
+
+       BL   @CLRVIB      ;uses R0
+       BL   @CLRBIG      go ahead, clear big buffer too
+
+       MOV  @2(R13),R10       ;total sectors
+       MOV  @24(R13),R12      ;get R12 from caller
+
+       LI   R1,LABEL1
+       LI   R2,VIBBUF+0
+       MOV  *R1+,*R2+    RA
+       MOV  *R1+,*R2+    MD
+       MOV  *R1+,*R2+    SK
+
+       LI   R9,LABEL2    where to stuff the text
+       BL   @CONCRU      populate CRU via R12
+
+       MOV  *R1+,*R2+    00 cru
+       MOV  *R1+,*R2+    00 cru
+
+       LI   R0,>2028     40 track
+       C    R10,@D1600
+       JLE  VIB1
+       LI   R0,>2050     80 track (Quad)
+       C    R10,@D3200
+       JLE  VIB1
+       MOV  @D3200,R10   ;FORCE MAX 3200
+
+VIB1   MOV  R0,@PARM2    ;set 40/80 track  in xxxC
+       MOV  R10,*R2+     ;xxxA - total AU
+       MOV  *R1+,*R2+    ;xxxC - >24,'D'
+       MOV  *R1+,*R2+    ;xxxE - 'SK'
+       MOV  *R1+,*R2+    ;xx10 - 40/80 track
+       MOV  *R1+,*R2+    ;xx12 - sides/density
+       RTWP
+
+; In: R12, value to convert
+;     R9, text location
+; used: r4,r5,r6,r8,r9
+BI     DATA 0            cru for calc
+CONCRU MOV  R12,@BI
+       LI   R6,BI        the value to convert to displayable hex
+       LI   R8,2         two bytes
+;;     LI   R9,LABEL2    ;use R2
+
+BK     CLR  R5
+       MOVB *R6+,R5
+       SWPB R5
+       SLA  R5,4
+       CLR  R4
+       MOVB R5,R4
+       AI   R4,>3000
+       MOVB R4,*R9+     ;*R9+
+       ANDI R5,>00FF
+       SWPB R5
+       SRL  R5,4
+       AI   R5,>3000
+       MOVB R5,*R9+     ;*R9+
+       DEC  R8
+       JNE  BK
+       RT
+;
+; Clear 256 byte VIB
+;
+CLRVIB LI   R0,VIBBUF
+CLRV2  CLR  *R0+
+       CI   R0,VIBBUF+256
+       JL   CLRV2
+       RT
+
+;
+; Clear 256 byte VIB
+;
+CLRBIG LI   R0,BIGBUF
+CLRB2  CLR  *R0+
+       CI   R0,256*31+BIGBUF
+       JL   CLRB2
+       RT
+
+
+;======================
+;RamHD partition setup
+; Reminder: current ramdisk hardware capacity does not exceed 1 sector per AU
+;
+; R0=start sector  [r7]
+; R1=total sectors
+; BLWP @BIGSET
+;
+BIGRAM TEXT 'RAMHD-'    0-5
+BIGCRU TEXT '1401'      6-9,  cru text
+BIGAUS DATA >1234        10,  HARD-code total sectors
+       BYTE >20          12,  32 sectors/track
+       BYTE >10          13,  AUs alloated for dile/dir headers
+       BYTE 0,0          14,  steprate/write precomp (not used)
+       BYTE >00          16,  xxxxyyyy, x=sect/au-1; y=#heads-1
+       BYTE >00          17,  xyyyyyyy  x=unused; y=writeprecomptrack
+       DATA 0,0       18/20,  VIB date/time
+       DATA 0            22,  totfiles | #subdir
+       DATA >0040        24,  ^FDR AU  [see sect/AU and calculate]
+       DATA >0           26,  ^DSK1 emulation
+BIGRAMEND DATA 0
+
+
+HFFFF  DATA >FFFF
+
+BIGSET DATA AUWS,$+2
+       BL   @CLRVIB      ;uses R0
+       BL   @CLRBIG      ;uses R0
+
+       MOV  *R13,R7      ;Sector offset into ramdisk
+       MOV  @2(R13),R3   ;total sectors
+
+       MOV  R3,@BIGAUS   ;set the sector count!!!
+
+       MOV  @24(R13),R12  ;cru
+
+       LI   R9,BIGCRU
+       BL   @CONCRU      ;populate CRU text
+
+       LI   R0,BIGRAM
+       LI   R1,VIBBUF
+HRD1   MOV  *R0+,*R1+         ;set VIB
+       CI   R0,BIGRAMEND
+       JL   HRD1
+
+       CLR  R0           sector
+HRD2   BL   @BIGBITSET
+       INC  R0
+       CI   R0,>40
+       JLE  HRD2
+
+; Mark sectors beyond our scope as USED
+;
+       MOV  R3,R10       start at end of max allocation
+       DEC  R10          subtract 1 for safety measure   ;;$$;;
+HRD4L  CI   R10,31*256*8      end of bitmap (31sec*256byte/sec*8bit/byte)
+       JHE  HRDEX1            yep,done
+       MOV  R10,R0            no, set R0 for routine
+       BL   @BIGBITSET
+       INC  R10               next sector
+       JMP  HRD4L
+
+
+; -Cleanup?
+HRDEX1
+       RTWP
+
+BIGBITSET
+       MOV  R0,R9        SAVE R0
+       MOV  R0,R7        sector to allocate
+       SRL  R7,3         --bitmap byte offset
+
+       LI   R8,>8000     set bit mask
+       ANDI R0,>0007     mask sector MOD 8 to get bit to set
+       JEQ  BIGS3        0? don't shift
+       SRL  R8,0         <>0, shift based on R0 mask
+
+BIGS3  SOCB R8,@BIGBUF(R7)  store this bit
+       MOV  R9,R0           and restore R0
+       RT
+
+; 'cause we can. Request 8k page some other day and shorten the program
+VIBBUF BSS 256
+BIGBUF BSS 256*32        ;VIB(0) + bitmap(1-31)
+       DATA 0            ;GenWIPE helper
+;eof
