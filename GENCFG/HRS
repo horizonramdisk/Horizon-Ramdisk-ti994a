@@ -1,0 +1,192 @@
+* File: HRS  v1.1
+*
+* Horizon ramdisk raw sector IO routine; matches MDOS/Geneve OS routine
+* Note: 8- and 16-bit refer to the CRU addressing width, which correspond
+*       to the model/capacity.
+*
+* 3.20.2021 Enable all CRU; no longer forced to 16-bit
+*           (this low level code is limited by signed 16-bit values)
+*
+* 7.24.2021 $Possible error: see HORX and JGS; is sector 1023 a problem?
+*
+*-----------------------------------
+* BLWP @RAMDSK
+*      r0: 0=WRITE; <>0 READ
+*      r1: buffer address
+*      r3: sector number to read/write
+*     R10: mapper save
+*      vibdsk
+*      totaus
+*      map: dsr mapped in at 0x8000
+*
+* RETURN:  R0msb error code (don't like how lsb is not cleared first)
+*----------------------------------
+; test code
+;      LWPI >F000
+;      LIMI 0
+;      LI   R0,>FF00
+;      LI   R3,0+>600    sector+offset
+;      LI   R8,BUFFER
+;      LI   R12,>1601
+;      BLWP @RAMDSK
+;
+;      MOV  R0,R0
+;      JNE  ERROR
+;      LI   R0,>27
+;      LI   R1,BUFFER
+;      LI   R2,10
+;      XOP  @SIX,0
+;ERROR  BLWP @0
+;BUFFER BSS 256
+;SIX    DATA 6
+*------end test code --------------
+
+RAMWS  BSS  >20          local
+MAP96  EQU  >F110
+TOTAUS EQU  >A           offset into VIB
+H0001  DATA >0001
+
+RAMDSK DATA RAMWS,$+2
+       MOVB @MAP96+3,R10      Save mapper
+       MOVB @HBA,@MAP96+3     map external bus to 0x6000-0x7fff
+
+       MOV  @0(R13),R0        read/write
+       MOV  @6(R13),R3   absolute sector#
+
+       MOV  @16(R13),R8
+       MOV  R8,R1        ;R1 copy for read/write. RESERVED
+
+       MOV  @24(R13),R12      get CRU from caller
+
+;;;    LI   R12,>1601         Force to CRU >1600 (16-bit) for testing
+
+*****start RAMdisk rack manipulation
+
+       SBO  0
+       LI   R2,>B900
+       LDCR R2,8              load low 8 page bits
+       SWPB R2
+       COC  @H0001,R12        check if 16-bit horizons access
+       JNE  HORS02
+       LDCR R2,0              load all page bits
+*
+HORS02
+HORS09
+HORS10
+; In theory, below code not needed for format purposes
+;;HORS10 MOV    @TOTAUS+>7900,R7      get total AUs into R7
+;;
+;      COC    @H0001,R12  test cru; if 16-bit, skip test
+;      JEQ    HORX
+;
+;      CI     R7,>0401   was 8-but CRU; error if sector>1024!
+;      JHE    HUDFSE     error
+;
+;HORX   DEC    R7
+;      MOV    R7,@JGS    save total AUs
+;-----------------------------------------
+
+* here is where sector number is determined for below routine
+       MOV    R3,R7      and REPLACE R7 with the desired sector # (R3)
+       CI     R3,1023
+       JGT    LINE0
+       INC    R7
+LINE0  MOV    R7,R2
+       ANDI   R2,>FFF8
+       S      R2,R7
+       SLA    R7,8
+       AI     R7,>7800   *9800
+       SRL    R2,2
+       AI     R2,7
+
+       CI     R3,1023
+       JEQ    OK0        special case, wraparound
+       CI     R3,1023
+       JGT    OK1        16-bit, do it as computed
+
+; Special case for 8-bit ramdisk (ie, sector<=1023)
+; If 8-bit, and R3>0 and R3<1024, then if R3=TOTAUS-1 (JGS) jump to OK0
+; This is damn peculiar. Investigate further. Is this a format aid?
+;
+;;       CI     R3,>0000   test earlier saved totaus
+;;JGS    EQU    $-2
+;;       JEQ    OK0      if equal, jump to OK0 and set rack >B9
+;-----------------------
+; futz with order of racks; thanks JPH EPROM.
+;
+       CI     R2,3*2+7
+       JGT    LINE1
+       AI     R2,89*2
+       JMP    OK
+LINE1  CI     R2,92*2+7
+       JLT    LINE2
+       INCT   R2
+       ANDI   R2,>00FF      MASK FOR 16 BIT ERROR
+       JMP    OK
+LINE2  AI     R2,>FFFA
+       JMP    OK
+
+; reset to first rack/first sector
+;  1) If R3=1023
+;  2) If R3=TOTAUS and <1023. why? (disabled above test for AUs)
+;
+OK0    LI     R2,>00B9
+       LI     R7,>7800   9800
+
+;do it
+OK     COC    @H0001,R12
+       JEQ    OK2
+       SWPB   R2
+       LDCR   R2,8              load low 8 page bits
+       JMP    HORS25
+OK1    AI     R2,>FFFA
+OK2    LDCR   R2,0
+
+*
+* READ OR WRITE--------->
+*      R0: 0=write; 1=read
+*      R1: buffer address from earlier, moved to R8
+*      R5: destroyed
+*      R7: points to ramdisk memory
+*      R8: mdos buffer
+*     R10: saved mapper address, restored @ HORS90
+*
+* 3.20.18   Read w/MOV versus MOVB
+* 1.18.2021 Change read/write to 4x MOV for speed improvement
+*
+
+HORS25 MOV  R1,R8      get saved BUFFER  address
+       LI   R5,32     ;256    # of bytes to move
+       CLR  R9           clear ERROR condition, no possible failure now
+       MOV  R0,R0             read or write?
+       JEQ  HRDWRT            0= write, 1= read
+
+;;HRDRED  MOVB *R7+,*R8+ ;1.18.2021, faster
+HRDRED MOV  *R7+,*R8+         read a horizons sector
+       MOV  *R7+,*R8+
+       MOV  *R7+,*R8+    1.18.2021, added 3 more moves for speed
+       MOV  *R7+,*R8+
+       DEC  R5
+       JNE  HRDRED
+       JMP  SECT90  (exit)
+*
+;;HRDWRT MOVB *R8+,*R7+  ;1.18.2021, faster
+HRDWRT MOV  *R8+,*R7+         write a horizon sector
+       MOV  *R8+,*R7+
+       MOV  *R8+,*R7+
+       MOV  *R8+,*R7+
+       DEC  R5
+       JNE  HRDWRT
+*
+* RETURN TO CALLER:
+*      Caller R0msb = status
+*
+SECT90 SBZ  0                 turn card off
+       MOVB R9,*R13           send error status to caller
+       MOVB R10,@MAP96+3      restore mapper
+       RTWP
+
+HUDFSE LI   R9,>C000          return error
+       JMP  SECT90
+*eof
+;;     END

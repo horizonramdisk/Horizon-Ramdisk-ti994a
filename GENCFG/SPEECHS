@@ -1,0 +1,94 @@
+; Speech detection modified from DISK2RAM JGS
+;
+;
+;
+; Actions:
+;      1) Set TI mode
+;      2) Map page >03 into >C000->DFFF page (for sound, speech)
+;      3) Map page >BC into >8000->9FFF page
+;      4) Test for speech
+;      5) Restore mapper and mode
+;
+SPCHRD EQU  >9000
+SPCHWT EQU  >9400
+H10   BYTE >10
+;;HAA   BYTE >AA
+       EVEN
+
+PHROM  DATA >0000
+RSA    DATA >0000
+SPDATA DATA 0            ;local not >8300
+
+READIT MOVB @SPCHRD,@SPDATA
+       NOP
+       NOP
+       NOP
+       RT
+
+TALKWS BSS  >20
+FOUND  DATA 0
+SAVF14 BYTE 0
+SAVF16 BYTE 0
+HBC    BYTE >BC
+H03    BYTE >03
+
+SPEAK  DATA TALKWS,THERE
+
+THERE  CLR  @FOUND       ;assume no speech
+
+       MOVB @>F114,@SAVF14    8000
+       MOVB @>F116,@SAVF16    c000
+       MOVB @HBC,@>F114       save mapper
+       MOVB @H03,@>F116
+       LI   R12,>1EF4         go to 4A mode
+       SBZ  0
+       LI   R12,>1EFE
+       SBZ  0
+
+       CLR  R0
+       MOV  R0,@PHROM
+       BL   @LOAD
+       MOVB @H10,@SPCHWT
+       BL   @READIT
+
+       CB   @SPDATA,@HAA      >AA present?
+       JNE  NOSYN             nope
+       SETO @FOUND       Yes, found SS
+
+NOSYN  LI   R12,>1EFE
+       SBO  0
+       LI   R12,>1EF4
+       SBO  0
+       MOVB @SAVF14,@>F114
+       MOVB @SAVF16,@>F116
+       RTWP
+
+; end detect
+
+LOAD   MOV  R11,R9
+       MOV  @PHROM,R0
+       LI   R2,4
+LOADLP SRC  R0,4
+       MOV  R0,R1
+       SRC  R1,4
+       ANDI R1,>0F00
+       ORI  R1,>4000
+       MOVB R1,@SPCHWT
+       BL   @DLY42
+       DEC  R2
+       JNE  LOADLP
+       LI   R1,>4000
+       MOVB R1,@SPCHWT
+       MOV  R9,R11
+       RT
+
+DLY12  NOP               ;check ABASIC
+       NOP
+       RT
+
+DLY42  LI   R1,10        ;check ABASIC for delay
+DLY42A DEC  R1
+       JNE  DLY42A
+       RT
+
+;end of file
