@@ -1,0 +1,7 @@
+Collection point for Backup Bit Remover
+Program to strip Myarc bits that interfere with some catalog programs
+The Ramdisk Operating System (DSR) has since been patched to clear the offending bits during level 2 File IO, so the programs may be more historical than useful.
+
+BBR (/4a) and BBRM (Geneve)
+
+Task: locate source code and upload
