@@ -10,12 +10,12 @@
 *        -- ALL RIGHTS RESERVED --          *
 *********************************************
 *                                           *
-* Updated 2012-2020, InsaneMultitasker (TT) *
+* Updated 2012-2025, InsaneMultitasker (TT) *
 *                                           *
 *********************************************
 
        COPY "CFG-S.txt"      peripheral test/display, ram count, rambo allocation
-       COPY "CFG-S1.txt"     8.12 CFG PROGRAM
+       COPY "CFG-S1.txt"     main CFG PROGRAM
        COPY "CFG-S2.txt"     SUBPROGRAMS and BLWP's
        COPY "CFG-S3.txt"     Data/byte/text blocks
 
