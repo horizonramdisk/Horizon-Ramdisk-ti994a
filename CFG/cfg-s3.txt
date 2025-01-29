@@ -1,4 +1,4 @@
-* CFG Version 8.42c   cfg-s3
+* File: cfg-s3.txt
 ********************************************* R0-R8 temp
 *                                           * R9    ADDNUM
 *        RAMDISK CONFIGURE PROGRAM          * R10   LINK
@@ -10,16 +10,29 @@
 *        -- ALL RIGHTS RESERVED --          *
 *********************************************
 *                                           *
-* Updated 2012-2020, InsaneMultitasker (TT) *
+* Updates 2012-2025, InsaneMultitasker (TT) *
 *                                           *
 *********************************************
 ;
 ; TO DO:
-; - review ROSLOC/Geneve RAMBO "ROMPAGE" code for possible removal
-; 5.21.2020 - added option and PAB for tipi https load. (just need a repository!)
+; 1.26.2026
+; RAMBO 8K is never visible to a Geneve in GPL mode. The gate
+; array is hardcoded to use pages >36/>37 in the >6000 space.
+; Consider removing paging code and initialization for Geneve. 
+;
+; CHANGES:
+; 5.21.2020 -   added hidden option/PAB for tipi https load (just need a repository!)
 ;
 ; 11.14.2020	Updated all "$" labels to "_" for xas99 compatibility
-
+; 11.14.2020   $If SAMS map is not at default on load, CFG may crash
+;		during the SAMS detection.
+;  7.24.2021	Updated ERR to reflect disk/file error
+;		Version updated to 8.42d
+;
+; 10.09.2024    Replaced SAMS detection routine with non-destructive version
+;		to solve multiple issues, including false negative.
+;  2.20.2024    HFDC level 2 detect changed to >27 to remove CorComp conflict
+;
 ****************************
 * CFG DATA/BYTE/TEXT BLOCK *
 ****************************
@@ -87,7 +100,7 @@ NOUSER DATA BO_OUT
        TEXT 'USRINT'
 NEWUL  DATA >0000,>00FC,>0000,>0000          New Underline Char
 
-; 5-20, added hidden option "T" for http tipi load
+; 5-20-2020, added hidden option "T" for http tipi load
 ADRTBL DATA SFIRST,CONFIG,LD,TIPLD,SV,FONT,EDIT,SCFG,RORG
 OPTTBL TEXT 'QNLTSFEDU'
 
@@ -104,16 +117,20 @@ FNAME  TEXT 'DSK1.ROS842C             '       **8.14F: added TICC to ROS name
 D      TEXT 'D'                              Check if 'D' was pressed
 TIPT   TEXT 'T'
 
-; SCRLN1 TEXT 'RAMBO/HORIZON CONFIG  v8.42c 23.Feb.2020'
-
-
+;Future option for TIPI load
 TIPPAB DATA >0500,>1000,>0000,>2000,82
 TIPNAM TEXT 'PI.https://github.com/horizonramdisk/Horizon-Ramdisk-ti994a/blob/master/ROS/ROSBIN'  ;82
        TEXT   '         '
 
-SCRLN1 TEXT 'RAMBO/HORIZON CONFIG  v8.42c   3.27.2020'
+
+SCRLN1   TEXT 'RAMBO/HORIZON CONFIG  v8.42f   1.25.2025'
+
+;;SCRLN1 TEXT 'RAMBO/HORIZON CONFIG  v8.42TST 2.20.2024'
+;;SCRLN1 TEXT 'RAMBO/HORIZON CONFIG  v8.43    9.11.2023'
+;;SCRLN1 TEXT 'RAMBO/HORIZON CONFIG  v8.42d   7.24.2021'
+
        TEXT '(C)1990 OPA/BMS                     -TT '
-SCRLN2 TEXT 'CARD   PERIPHERAL    | TOTAL  RAM- RAMBO'  ;8.14f:' PROG'->'RAMBO'
+SCRLN2 TEXT 'CARD   PERIPHERAL    | TOTAL  RAM- RAMBO'  ; 8.14f:' PROG'->'RAMBO'
        TEXT 'ADDR. CARD DETECTED  | SIZE   DISK  RAM '
        TEXT '----- -------------- - ----- ----- -----'
 CARDLN TEXT '>__00 ______________   ____K ____K ____K'
@@ -127,7 +144,8 @@ BADCRC  TEXT ' Failed: ROS has wrong CRC. Press a key.'
 GOODCRC TEXT ' Success! ROS loaded/CRC OK. Press a key'
 NULLCRC TEXT ' OK; ROS loaded w/null CRC.  Press a key'
 
-ERR    TEXT ' Error, press any key to return to menu '
+ERR    TEXT ' Invalid file/disk error - press any key'   ;7.24.2021
+;ERR    TEXT ' Error, press any key to return to menu '
 SAVDSK TEXT ' Keep existing disk information (y/n)?  '
 SAVDSKCONFIRM
        TEXT ' Not saving info!  C to confirm; F9=exit'
@@ -227,7 +245,8 @@ IDECRD BYTE 4            ;7
        TEXT 'IDE1'
 
 WDSCRD BYTE 1		 ;8  HFDC - Use level 2 to distinguish w/Personality #25
-       BYTE >25
+;;       BYTE >25
+         BYTE >27      ;2.20.2024, CorComp Ramdisk uses >2x for its devices! >27 should be ok.
 
 BWG99  BYTE 5            ;9    BWG Floppy Controller
        TEXT '16SPT'
@@ -290,38 +309,39 @@ TP1    BYTE 2		 ;2-24-2020
        DATA 0
        EVEN
 *
-* SuperAMS maps in 4K chunks
-*
 GENEVE DATA 0            0=ti; 1=Geneve (see startup code)
-PLAYWS BSS 32
-*PLAYSV BSS >22
-H0100  DATA >0100
-HFFAA  DATA >FFAA
 
-SAMSDT DATA PLAYWS,$+2
-       CLR  @0(R13)           0=no ams
-       LI   R12,>1E00
-       SBO  0
-**     LI   R2,PLAYSV
-       LI   R1,>FEFF
-       LI   R0,>4000
-AMSLP  AI   R1,>0101
-*      MOV  *R0,*R2+
-       MOV  R1,*R0+
-       CI   R0,>4020
-       JLT  AMSLP
-       C    R1,@>401E         r1=0f0f (mapper)
-       JNE  NOAMS             no, not an ams
-       SETO @0(R13)           YES. AMS
-NOAMS  SBZ  0
-       RTWP
-
-* 7/31/2015 - Not sure I like this Geneve RAMBO code...
-; consider reviewing CFG812/814 LIST files later.
+;------------------------------------------------------
+; 10 Sept 2023
+; Non-destructive simple test for SAMS
 ;
-; Theoretically, the only time RAMBO dsr should be active
-; and visible is if GPL was loaded with ROMpage enabled.
-; Therefore, we probably should remove the paging code.
+; Copy mapper value for >4000-4FFF bank,
+; modify it and if mapper register changes, assume SAMS
+; Caller's R0 is modified. 0=no sams, <>0 SAMS
+;
+
+PLAYWS BSS 32
+H0101  data >0101
+SAMSDT DATA PLAYWS,$+2
+       clr   @0(R13)
+       li    r12,>1E00
+       sbo   0
+       mov   @>4008,R2      ;save whatever was in the mapper for >4000-4fff
+       a      @H0101,@>4008 ;change the value    
+       c      r2,@>4008   ;is it still the same? 
+       jeq    noams     ;yes. can't be SAMS
+       seto   @0(R13)     ;no, assume SAMS
+       mov    r2,@>4008    ;restore, for futureproofing
+noams  sbz 0
+       rtwp
+
+
+;----------------------------------	
+; 1.26.2026
+; RAMBO 8K is never visible to a Geneve in GPL mode. The gate
+; array is hardcoded to use pages >36/>37 in the >6000 space.
+; Consider removing paging code and initialization for Geneve. 
+;
 ******************************
 * SPECIAL EXTRA 1K RAMBO ROS *
 ******************************

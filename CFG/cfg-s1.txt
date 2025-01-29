@@ -1,4 +1,4 @@
-* CFG Version 8.42c   27 March 2020  CFG-s1
+* File: cfg-s1.txt
 ********************************************* R0-R8 temp
 *                                           * R9    ADDNUM
 *        RAMDISK CONFIGURE PROGRAM          * R10   LINK
@@ -10,7 +10,7 @@
 *        -- ALL RIGHTS RESERVED --          *
 *********************************************
 *                                           *
-* Updated 2012-2020, InsaneMultitasker (TT) *
+* Updates 2012-2025, InsaneMultitasker (TT) *
 *                                           *
 *********************************************
 * DATE      CHANGE
@@ -60,7 +60,8 @@
 ; 3.27.2020 	Fixed powerup save/restore. 
 ;
 ; 11.14.2020	Updated all "$" labels to "_" for xas99 compatibility
-
+;  7.24.2021    Transparent color selection inhibited
+;
 **********************
 * DISPLAY CFG SCREEN *
 **********************
@@ -352,7 +353,10 @@ UPARO  MOV  R7,R7        are we at the first element?
 FCLR   LI   R2,2         first element, color, is 2 long
        BL   @GETNBR
        MOV  @NUMBER,R4
-       JEQ  FCLR         no "0" for color
+;       JEQ  FCLR         no "0" for color
+       ci   r4,1	;7.24.2021, don't allow transparent
+       jle  fclr	
+
        CI   R4,16
        JGT  FCLR
        C    R4,@BC       is FC=BC?
@@ -367,7 +371,10 @@ FCLR   LI   R2,2         first element, color, is 2 long
 BCLR   LI   R2,2         do the same for background color
        BL   @GETNBR
        MOV  @NUMBER,R4
-       JEQ  BCLR         no "0" for color
+;;       JEQ  BCLR         no "0" for color
+
+       ci   r4,1	;7.24.2021, don't allow transparent
+       jle  BCLR
        CI   R4,16
        JGT  BCLR
        C    R4,@FC       BC=FC?
@@ -874,7 +881,7 @@ TIPLD
 LD     CLR  R5		; FLAG 0=saved disk info; 1=
 	movb r3,@optsav	;save option for TIPI load test
 
-       ABS  @VALID		is there a valid ros loade?
+       ABS  @VALID		is there a valid ros loaded?
        JEQ  SAVD3		no, so don't ask to preserve info
 
        BLWP @VWTS
@@ -1135,18 +1142,22 @@ GODSR  MOV  *R11+,@GODSR0+2
 GODSR0 DATA 920,>0000,40
        LI   R0,935
        MOV  *R11+,R1
-       LI   R2,25
+
+       LI   R2,25	;len
        BLWP @VMBW
-       BLWP @GETSTR
+       BLWP @GETSTR	;max length of input string is in R2
+
        CI   R3,>0F00
        JEQ  GODSR2
+
        LI   R3,>2000
        LI   R2,24
-GODSR1 CB   R3,@>0000(R2)
+GODSR1 CB   R3,@>0000(R2)	;prune spaces and update dsr len
        JNE  GODSR3
        DEC  R2
        JNE  GODSR1
 GODSR2 B    @REDORO
+
 GODSR3 LI   R0,>0F80
        INC  R2
        MOV  R2,@-2(R1)
@@ -1154,8 +1165,8 @@ GODSR3 LI   R0,>0F80
        AI   R2,10
        BLWP @VMBW
 REDSR  CLR  R0
-       LDCR R0,0         NOT SURE what this is doing ?
-       LI   R6,>0F89
+       LDCR R0,0        ;Safety - to ensure ramdisk is turned off
+       LI   R6,>0F89	;before the DSR call?
        MOV  R6,@>8356
        BLWP @DSRLNK
        DATA 8

@@ -1,4 +1,4 @@
-* CFG Version 8.42c   14 March 2020  TT
+* File: cfg-s.txt     v8.42f   1.28.2025
 *********************************************
 *                                           *
 *        RAMDISK CONFIGURE PROGRAM          *
@@ -10,10 +10,10 @@
 *        -- ALL RIGHTS RESERVED --          *
 *********************************************
 *                                           *
-* Updated 2012-2020, InsaneMultitasker (TT) *
+* Updates 2012-2025, InsaneMultitasker (TT) *
 *                                           *
 *********************************************
-* Reconciled source March 2, 2012
+* Reconciled 8.14F binary to 8.12 source on March 2, 2012
 *
 * Changes made to conform to 8.14F:
 *      FNAME:  Modified DSK1.ROS to DSK1.ROSTICC
@@ -22,39 +22,39 @@
 *      NAMES:  Modified "32K*8 HORIZON" to "32Kor128K HRD"
 *              (Might be able to fix the mashed text later)
 *
-*  The RAMBO pagemap temporary buffer (BOTEMP)
-*  was located near the end of the segment (0xF900 or so) until 8.14F CFG was
-*  sector-edited to move this to 0xB400.  Only two locations were impacted,
-*  but changing the source requires care because of the relocatable code calcs
-*  based on the original location. A new buffer Equate must be used and
-*  due diligence taken to not impact ROS WS or buffers in the area.
-*  Hard-coded to >B400:  TSTOP, LDROS1
-*
-*  ROS VERSION HEADER: 
-*      - >AA81 header/version flag remains unchanged for compatibility purposes.
-*      - This should probably be updated to inhibit interoperability 
-*        with older ROS/CFG/MENU at a future date
+*  The RAMBO pagemap temporary buffer (BOTEMP) was located near the end of
+*  the segment (0xF900 or so) until 8.14F CFG was sector-edited to move this
+*  to 0xB400.  Only two locations were impacted but changing the source
+*  requires care because of the relocatable code calcs based on the original
+*  location. A new buffer Equate must be used and due diligence taken to not
+*  impact ROS WS or buffers in the area.
+*      Hard-coded to >B400:  TSTOP, LDROS1
+*------------------------------------------------------------------------------
+*  ROS VERSION HEADER considerations:
+*      - >AA81 header/version flag remains unchanged for compatibility purposes
+*      - This could be updated to inhibit interoperability with older ROS/MENU
 *      - Disable ROS loader unless ROMPage is active (Geneve only)?
 *
-*  REVISIONS:
+* REVISIONS: 
 * 3.3.2012
 *    8.32   Updated device detection.  HFDC, IDE, and SCSI.
-*           Maximum sector size increased from 1600 to 3200 (quad)
+*           Maximum sector size increased from 1600 to 3200 (quad density)
 *           Dummy code to test available program space (DEADBEEF)
-* 7.5.2015  CRC Detection added to CFG-S1 and text BADCRC added in this file
-* 7.8.2015  Added HDX device to scan list
+*  7.5.2015 CRC Detection added to CFG-S1 and text BADCRC added in this file
+*  7.8.2015 Added HDX device to scan list
 *           Modified default ROS filename to "ROS832"
 * 7.11.2015 Added HSGPL and AVPD cards (TK)
 *           Added Speech, EVPC, and BwG cards
 ** #  (should we compute CRC when SAVig ROS from CFG?) [NO. Do not allow user to save CRC]
+*
 * 7.27.2015 Added GRAM 1.1, CorComp Memory+512, Foundation 128K (Schmitzi)
 *
 * 7.31.2015 Clear status reg and some V9938 vid regs
 *           Detect Geneve and rompage status
 *
 * 5.07.2017 Added TIPI Device
-*           Version 8.38
 *
+* Version 8.38
 ; 1-22-2010	CFG838 crashes after you press a key to configure the ramdisk. Why?
 ;		Because CFG is saving ROS data after label CLOC1. CFG is using e000->ffff
 ;		so the save goes... nowhere. Modified.
@@ -76,13 +76,14 @@
 ;
 ; 2-15-2020	Corrected RAMBO allocation calculations and page map limits
 ; 		Still need to confirm that RAMBO does not stomp over ROS or ramdisk pages
-; CFG 8.42c
+;
+; Version CFG 8.42c
 ; 2-16-2020	Corrected FONT loader hardcoded address.  
 ;		Static pointer added to ROS at >5804/5806. Verified w/CHARA1 file load.
 ;
 ; 2-23-2020	Added GPIB IEEE-488 and Myarc Personality cards, Thermal printer 
 ;
-; 5-25-2020	CRDSET, check for CRU 9640 (for geneve detection) and skip turning
+; 5-25-2020	CRDSET, check for CRU >9640 (for geneve detection) and skip turning
 ;               on that CRU bit! Device at >1600 no longer turned on incorrectly.
 ;
 ;              *Verify RAMBO allocation is not overlapping with the ramdisk drive allocations
@@ -93,9 +94,24 @@
 ;		are about to reformat their Geneve ramdisk.  See MDOS 7.00 / FORM code.
 ;
 ; 11.14.2020	Updated all "$" labels to "_" for xas99 compatibility
+;
+; 10 Sept 2023  Updated SAMS detection routine to be non-destructive and restore the
+;               mapper.  Resolves issues with some programs.
+; x.x.2024      Fixed HFDC detection to resolve previously unknown device conflict. 
+;
+; 1.26.2025     Fix RAMBO calculations. Previous "fixes" were not correct.
+;               The temporary pagelist is populated with ALL possible, contiguous
+;               page locations.  RAMBO memory is populated from the end of the temp
+;               list, working backwards. Versions after 8.38 incorrectly count and
+;               assign pages.  Earlier verions may overlap RAMBO and RAMDISK pages,
+;               depending on installed memory and disk assignments.  
+;          $$$  The Geneve memory mapper is hard-wired to the cartridge space at >6000. RAMBO
+;               routines will be loaded here if left unprotected; consider removing Geneve-specific
+;               mapper code from the special 1K ROS area.
+;
+;-----------------------------------------------------------------------------
 
-
-       TITL 'Horizon RAMdisk CFG v8.42c'
+       TITL 'Horizon RAMdisk CFG v8.42f'
        IDT  'CFG842'
 
        DEF  SFIRST,SLAST
@@ -110,7 +126,16 @@ VDPR1  EQU  >83D4
 AUTOFF EQU  >83D6
 GPLWS  EQU  >83E0             DSR WORKSPACE
 
+RAMBOTEMPPAGELIST EQU >B400    ;1.27.2025, remove hard-coded address >B400
+
 	AORG >C000	; test 1.25.2020. RAMBO temp buffers are at >B400
+;
+; 1.26.2025 (842f)
+; RAMBO page map is 514 bytes, however, the temporary page list 
+; requires 16-bit per page x 1024 pages = 2K. (>800 bytes)
+; therefore, the temp buffer will consume >B400 to >BBFF
+; If Ramdisks are ever expanded, we will need to adjust this value and program start
+;
 
 ******************************
 * SETUP & TEST RESULT SCREEN *
@@ -124,10 +149,8 @@ SFIRST LIMI 0
        MOVB R0,@VDPR1
        SWPB R0
        BLWP @VWTR
-       BL   @VRSETR      7.31 Set vregs, 9938 clear VR8-15
+       BL   @VRSETR      7.31 Set /4a vregs. Clear 9938 regs VR8-15
 
-*      LI   R0,>07F4
-*      BLWP @VWTR
        BL   @CLS
        BLWP @VWTS
        DATA >968,NEWUL,8
@@ -136,23 +159,25 @@ SFIRST LIMI 0
        BLWP @VWTS
        DATA 120,SCRLN2,120
 
-* Geneve detect and map x4000 and x6000 spaces
+* Geneve detection. 
+* Do not remap >4000 or >6000 space at this time
        CLR  @GENEVE
-       LI   R2,>8002
+       LI   R2,>8002     Geneve 8kx8 mapper is (0x8000-0x8007)
        CLR  R0
 
        MOV  *R0,R1       save @0
        INCT *R0          change it
        C    *R0,R1       still equal?
-       JEQ  TIROM        yes, ROM. Not Geneve
+       JEQ  GEND1        yes, ROM. Not Geneve
 
 ; assume geneve since we found RAM at >0000
-       SETO @GENEVE      got a geneve.
+       SETO @GENEVE      set flag. assume this is a geneve.
        MOV  R1,*R0       restore @0
-
-; If we are not in rompage mode, show Geneve only and end. 
-; Do not allow user to do anything
-       MOV  *R2,@SVPAGE       Save geneve DSR page setting for restaart
+;
+; If Geneve is NOT in rompage mode, do not try to detect cards
+; and don't allow any configuration. Otherwise, proceed.
+;
+       MOV  *R2,@SVPAGE       Save geneve DSR page setting for restart
        CB   @RMPAGE,*R2  ROMPAGE active?
        JEQ  GEND1           Yes.
        LI   R14,240
@@ -160,10 +185,9 @@ SFIRST LIMI 0
        B    @CRUK2         sorry, only show Geneve. No RAMdisks.
 
 ;
-; Begin detection for either TI or Geneve in ROMpage mode 
+; Begin peripheral card detection:
+;
 GEND1
-GENDSR
-TIROM
 CSAVED LI   R12,>1000
 CFG0   BL   @FINDSR           Check for a PGRAM card
        DATA >A,PGRAM,CFG1
@@ -178,13 +202,10 @@ CFG2   LI   R12,>1000
        LI   R13,TABLE
        LI   R14,240
 
-
-;
+;----------------------------------------------------
 ; FINDSR modifies R1 as part of the detection scheme
 ; R1 is a pointer to the device name display table (16 bytes per entry)
 ;  
-;
-
 NXTCRD LI   R1,4
        BL   @FINDSR
        DATA >8,TIPI1,ENDCHK   #4 TIPI device
@@ -207,7 +228,6 @@ NXTCRD LI   R1,4
 
        BL   @FINDSR
        DATA >A,CTRLER,ENDCHK  #11 Floppy Ctrl - CALL FILES
-
 
        BL   @FINDSR
        DATA >8,AXIOM,ENDCHK   #12  Axiom
@@ -242,19 +262,14 @@ NXTCRD LI   R1,4
        BL   @FINDSR
        DATA >A,GRAM11,ENDCHK  #24 GRAM 1.1 Gram Card
 
-;;; 2-23 Add GPIB (1488 card) and Personality Card
-
        BL   @FINDSR
        DATA >8,GPIB1,ENDCHK   ;#25 IEEE 488 card
-;
-; 2-23-20 Can we find Personality card via WDS if we search for >25 for the HFDC?  
-;
+
        BL  @FINDSR
        DATA >8,PERWDS,ENDCHK  ;#26 Personality Card (ruled out HFDC,SCSI,IDE, TIPI, above)
 
-       BL  @FINDSR		;#27 Thermal Printer
+       BL  @FINDSR	      ;#27 Thermal Printer
        DATA >8,TP1,ENDCHK
-
 ;------------------------------------END OF EASY CARDS ------------------
 
 
@@ -292,16 +307,13 @@ CHKEND LDCR R7,0              SWITCH BACK TO 2K MODE!
        MOV  R1,R1
        JNE  ENDCHK
 
-
-
 ;=======================================================================
-; Ramdisk check happens after the 'normal' devices are complete.
+; Ramdisk check happens after the 'other' devices are complete.
 ; R1 is no longer incremented; it is instead loaded immediately
 ; for these following devices.
 ;
 ; EQUates for the devices are found after the names (below)
 ;
-
 * Special SAMS test
        CI   R12,>1E00         No card, no Horizon. Are we at SAMS cRU?
        JNE  UNDEF1            No.
@@ -469,15 +481,17 @@ TST8K  LI   R1,SET8K      *   START OF 8K*8 HORIZON TEST
        LI   R0,3              Skip over nondecoded pages
        JMP  TSTDSK            Jump to the common TEST code
 *
-* 8.14f: BOTEMP is not affected here. We are clearing the area on the RAMdisk
-*        but not the actual temp buffer itself, since that was sector-edited
-*        to 0xB400. Do not re-EQUate BOTEMP -- relocatable code relies on it
-
+* 8.14f: This clears the rambo map on the ramdisk. Not the temp buffer. 
+* 8.42 : 8K rambo is never visible on a Geneve. Also, is the RACK in question
+*        used by a GenCFG formatted ramdisk? if so, this clear could currupt it.
+*
+*
 TSTRAM LI   R1,BOTEMP         START OF RAMBO/HORIZON TEST
        LI   R2,256            Clear the temp page map table
 TSTRM0 CLR  *R1+              Clear a map location
        DEC  R2                Are we finished yet?
        JNE  TSTRM0            Nope, so clear some more
+
        ABS  @VALID            Check if 7.38 ROS is installed
        JEQ  TST32K            If no 7.38 ROS then no ROS updating
        LI   R15,>8001         RAMBO ONLINE so allow ROS updating
@@ -515,45 +529,18 @@ NXTRAM INC  R0                Start at the next page
        INC  R5                Another page found, so count it
        MOV  R15,R15           Check if updating RAMBO ROS
        JEQ  NXTRAM            Nope, so skip over building MAP
-
-; 2-14-2020 (BUG)
 ;
 ; The RAMBO pagemap is 255 entries x 16 bits.  The pagemap contains the CRU address of
-; the available page.  R2 and R6 are computed as follows, basically, each
+; the available page.  R2 and R6 are computed during each iteration, however, tas follows, basically, each
 ; page entry is repeated 4 times (there are 4 x 2k per page) so as the loop is processed,
 ; the pagemap only has one entry per available page. 
 ;
-; NOTE:
-; If there was a problem with a ramchip mid-boundary, this would be a problem; I don't think
-; the hardware is configured to allow this however.
+; This next routine creates the temporary page list starting at RAMBOTEMPPAGELIST.
+; Each entry represents the CRU address/offset of the 8k page.  R2 and R6 are computed
+; during every loop, however, an entry is only added every 4th time. Why? Each detected
+; page is 2k, so we need four to make an 8k page. For an 8MB Ramdisk, the temporary
+; list will consume 1024 entries x 2 bytes/entry = 2048 bytes.  
 ;
-;	r2	r6
-;	--	--
-;	2	8
-;	2	8
-;	2	8
-;	2	8
-;	4	16
-;	4	16
-;	4	16
-;	4	16
-;	6	24
-;	6	24
-;	6	24
-;	6	24
-;
-;
-; Therefore, when we count available pages we must take into account:
-;  1. maximum number of pages = 255
-;  2. each page entry requires 16 bits
-;  3. RAMBO pagemap is 255 * 16 bits = 510 bytes
-;  4. Each page is equivalent to 8k
-;  5. maxpages * pagesize = 255*8k = 2040K
-;  6. To translate from 2k to 8k, we must therefore allow R2 to reach reach 255*4
-;  7. The pagemap is contiguous racks meaning the memory test MUST stop when it reaches a hole
-;
-
-*->rambo page totals calc'd here. Only 256 byte memmap...watch it!
        MOV  R0,R2             Save the page # for NXTRAM loop
        SRL  R2,2              Calc 2K page count into 8K count
        MOV  R2,R6             Save the new page # for addr.
@@ -563,28 +550,23 @@ NXTRAM INC  R0                Start at the next page
 *
 * 1st of TWO instances of ROS8.14F pagelist move from BOTEMP to B400
 *
-       CI   R2,255*2  	;2-14.2020; fix.  See above explanation.  Must account for the 2k to 8k translation
-       JH   NXTRAM                 since pagemap is 256!
-
-       MOV  R6,@>B400(R2)     ****this is sector edited from 8.14 to 8.14F* **
-*      MOV  R6,@BOTEMP(R2)    Store the CRU page value in MAP
+       MOV  R6,@RAMBOTEMPPAGELIST(R2)   ;1.27.2025, equated B400
+**       MOV  R6,@>B400(R2)     ****this is sector edited from 8.14 to 8.14F* **
+**       MOV  R6,@BOTEMP(R2)    Store the CRU page value in MAP
        JMP  NXTRAM            Keep going until TSTOP is executed!
 
 TSTOP  LDCR R7,0              Ping-Pong back to the first page
        SBO  0                 Just incase we are in 8 bit mode
        MOV  R8,*R1            RESTORE THE PAGE DATA!
-**     MOV  R2,@LDROS0+2      SAVE R2 FOR LOADING OF ROS MAP!
-
-; 2-14-2020 - re-adjust maximums based on above information
-
-       CI   R2,255*2       Rambo pages exceed 255?
-       JLE  RAMOK1       No
-       LI   R2,255*2       Yes
-
-RAMOK1 
-       MOV  R2,@LDROS0+2   Save R2 for loading of ROS/RAMBO map
-
-* end adjustment -----------------
+;
+; 1.26.2025
+; This is important: R2 contains the LAST "rambo" 8k page INDEX# (16 bit)
+; for the entire ramdisk. We want the entire, physical memory list. We don't
+; yet care if the pages are used by a ramdisk, that is figured out
+; as part of the next routine.  LDROS0+2 is set via self-modifying code:
+;
+       MOV  R2,@LDROS0+2      SAVE R2 (index) FOR LOADING OF RAMBO page list
+;
 
 TSTDK  MOV  R5,R0             Save the number of pages for later
        SLA  R0,1              Convert count into TOTAL K onboard
@@ -594,6 +576,7 @@ TSTDK  MOV  R5,R0             Save the number of pages for later
 TSTDK4 SLA  R3,2              Calc number of sectors on this card
        MOV  R3,@MSEC          Save TOTAL SECTORS for DISPLAY
        BL   @NUMASC           Write the TOTAL K value
+
        DATA CARDLN+26         ADDRESS OFFSET FOR SCREEN POSITION
        ABS  @VALID            Check if ROS 8.1 is installed
        JEQ  TSTDK3            If no ROS 8.1 then print 0K values
@@ -612,7 +595,18 @@ TSTDK0 INCT R0                Point to the drive size for a drive
        MOV  R2,R2             Check for a partly used page
        JEQ  TSTDK1            Nope, so don't count a extra page
        INC  R1                Count the partly used page!
-TSTDK1 S    R1,R5             Calc TOTAL AMOUNT OF RAM NOT USED
+
+
+; 1.26.2025, this is where R5 is set for RAMBO pagelist copy
+; . It is the REMAINING 2k pages, after accounting for ramdisk and
+;   any other pages ROS needs.
+; R5=total 2k RAM(R5) - used 2k RAM(R1) = Remaining 2k pages for RAMBO***
+
+TSTDK1 S    R1,R5             Calc TOTAL AMOUNT OF 2K pages NOT USED (R5)
+
+; don't get confused. Since R1 represents the total 2k pages, then for
+; display purposes, we multiply by 2 to get total k. 10 pages * 2k/page =20k
+;
        MOV  R1,R0             Save the number of pages for later
        SLA  R0,1              Convert count into TOTAL RAMDISK
        DECT R0                Don't count the first min. 2K used
@@ -621,55 +615,59 @@ TSTDK3 BL   @NUMASC           Write the TOTAL RAMDISK value
        CLR  R0                Display 0K PROG RAM if no RAMBO ROS
 
        MOV  R15,R15           Check if RAMBO ROS installed
-       JEQ  TSTDK2            Nope, so display 0K PROG RAM
-
+       JEQ  TSTDK2            Nope, so display 0K RAMBO/PROG RAM
+;
+; Yes, RAMBO is installed. Set up the RAMBO memory/pagelist.
+;
        LDCR R15,0             Can we have the 8K DSR ON please?
        LI   R0,ROSPGM         Start at the SPECIAL RAMBO ROS
        LI   R1,ROSLOC         Place to LOAD ROS into 8K DSR
-LDROS0 LI   R2,>0000          SAVED R2 FOR LOADING OF ROS MAP!
+LDROS0 LI   R2,>0000          SAVED R2 (index) of last entry in temporary rambo 8k pagelist
 
-* This BOTEMP is required for relocatable code segment!!!! Don't modify!!
-
+;
+; First, copy the special ROS from CFG to the Ramdisk
+;
        LI   R3,BOTEMP-ROSPGM  Length of ROS minus RAM MAP!
 LDROS  MOV  *R0+,*R1+         Load a word of the SPECIAL ROS
        DECT R3                Check to see if at end of load
        JNE  LDROS             Nope, so continue to load
 
 ****
-*      Second instance of sector-edited pagemap found in ROS 8.14F
-*      This routine needs to be modified. If the RAMdisk size exceeds 2MB
-*      the buffer will overrun into the WS and buffers within the 0x5800 space
-*      Bad things(TM) will result.  PRobably should EQUate this >B400 address or BSS it.
+*     This was the 2nd instance of sector-edited pagemap found in ROS 8.14F
+*     In ROS 8.14/8.14F, if the RAMdisk size exceeds 2MB the rambo pagelist will
+*     overflow into the WS and buffers in the 0x5800 space. If a RAMBO program tries 
+*     to use such memory, disaster will ensue. 
 *
-* LDROS1 MOV  @BOTEMP(R2),*R1+  Get last page and store into MAP
-*
-LDROS1 MOV  @>B400(R2),*R1+
-       DECT R2                Check if at the end of the MAP
-       JOC  LDROS1            Nope, so get next last page
+*     LDROS1 MOV  @BOTEMP(R2),*R1+  Get last page and store into MAP  old 8.14 location
+**** 
 
-       MOV  R5,R0             Save the number of pages for later
+; Let's copy pages from the full, temporary page list, starting from the end and working
+; toward the beginning.  The routine halts when we have reached maximum of 255 pages or
+; when we reach the beginning of the temporary page list, whichever comes first. 
 
-*------ 7.8.2015 fix RAMBO maximum allocation ----
+       srl  r5,2        ;adjust remaining page count / 4 (from 2k to 8k page count)
+       clr  r0          ;start counter
+ldros1 ci   r0,255      ;reached max pages? (base 0!)
+       jeq  nomore      ;yes, stop adding rambo pages to pagelist
+       dec  r5
+       jeq  nomore
+       mov  @RAMBOTEMPPAGELIST(R2),*R1+   ;add "next" page from end of pagelist
+      
+;;     mov  @>B400(R2),*R1+  ;add next page to pagelist
+       inc  r0               ;count+1 (base 1 for page count)
+       DECT R2               ;point to the --previous-- index
+       JOC  LDROS1
 
-      mov  @ldros0,r0	;2-15-2020, need to get the actual page count here! not remaining ram on card!
+; There is no calculation. R0==MAXPAG is simply the count of 8k pages
 
-       CI   R0,255*2       Check remaining (RAMBO) pages
-       JL   RAMOK2       if less than 255, we are ok otherwise
-       LI   R0,255*2       force maximum to 255 (can't exceed!)
-*------
-RAMOK2 
-;      pagecount from ldros2 is really page*2
-;      so we only divide by two to get the count
-;      SRL  R0,2              Calc 2K page count into 8K count
-       srl  r0,1	;2-15 error
+nomore mov  r0,@BO_WS+20   ;save RAMBO MAXPAG value
+       sla  r0,3           ;convert count into K for display
 
-       MOV  R0,@BO_WS+20      Update RAMBO ROS MAXPAG value
-       SLA  R0,3              Convert count into K PROG RAM value
 TSTDK2 BL   @NUMASC           Write the PROG RAM value
        DATA CARDLN+38         ADDRESS OFFSET FOR SCREEN POSITION
        CLR  R6                CRU value to turn everything off!
        LDCR R6,0              SHUT DOWN THE SYSTEM please!
        LI   R2,40             Display on screen the whole line
        B    @CARDRT           Done, so loop back for another card!
-
+;----end of fixed/updated code 1.26.2025
 ;end
